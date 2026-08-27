@@ -445,7 +445,7 @@ export function renderPlacesList() {
           </div>
 
           <!-- Right: Actions (Add to Plan + Admin controls) -->
-          <div class="flex items-center gap-2 w-full md:w-auto justify-end pt-2 md:pt-0 border-t md:border-t-0 border-slate-100 flex-shrink-0">
+          <div class="flex items-center gap-2 w-full md:w-auto justify-end pt-2 md:pt-0 border-t md:border-t-0 border-slate-100 flex-shrink-0 relative z-10">
             ${state.isAdmin ? `
               <button onclick="event.stopPropagation(); window.OceanApp.openEditPlaceModal('${place.id}')" title="Edit Place" class="p-2 rounded-full border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-sky-600 transition-colors text-xs">
                 <i class="fa-solid fa-pen-to-square"></i>
@@ -456,14 +456,14 @@ export function renderPlacesList() {
             ` : ''}
 
             <button type="button" 
-                    onclick="event.stopPropagation(); window.OceanApp.togglePlaceSelection('${place.id}')"
+                    onclick="event.stopPropagation(); window.OceanApp.togglePlaceSelection('${place.id}', event);"
                     class="w-full md:w-auto px-5 py-2.5 rounded-full font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all duration-200 cursor-pointer shadow-sm ${
                       isSelected 
                         ? 'bg-red-50 text-[#a80c10] border border-red-200 hover:bg-red-100' 
                         : 'bg-[#a80c10] hover:bg-[#8e0a0d] text-white shadow-red-900/20 active:scale-95'
                     }">
-              <i class="fa-solid ${isSelected ? 'fa-circle-check text-[#a80c10]' : 'fa-plus'}"></i>
-              <span>${isSelected ? 'Added to Plan ✓' : 'Add to Trip Plan'}</span>
+              <i class="fa-solid ${isSelected ? 'fa-circle-check text-[#a80c10]' : 'fa-plus'} pointer-events-none"></i>
+              <span class="pointer-events-none">${isSelected ? 'Added to Plan ✓' : 'Add to Trip Plan'}</span>
             </button>
           </div>
 
@@ -586,14 +586,22 @@ export function animateCartBadges() {
 /**
  * Toggle Place Selection
  */
-export function togglePlaceSelection(placeId) {
+export function togglePlaceSelection(placeId, evt) {
+  if (evt) {
+    if (typeof evt.preventDefault === 'function') evt.preventDefault();
+    if (typeof evt.stopPropagation === 'function') evt.stopPropagation();
+  }
+
+  const cleanId = String(placeId || '').trim();
+  if (!cleanId) return;
+
   let city = travelData.cities[state.currentCityId];
-  let place = city && city.places ? city.places.find(p => p.id === placeId) : null;
+  let place = city && city.places ? city.places.find(p => String(p.id).trim() === cleanId) : null;
 
   if (!place) {
     // Search across all cities as fallback
     for (const cId in travelData.cities) {
-      const found = travelData.cities[cId]?.places?.find(p => p.id === placeId);
+      const found = travelData.cities[cId]?.places?.find(p => String(p.id).trim() === cleanId);
       if (found) {
         city = travelData.cities[cId];
         place = found;
@@ -607,13 +615,14 @@ export function togglePlaceSelection(placeId) {
     return;
   }
 
-  const existingIndex = state.selectedPlaces.findIndex(p => p.id === placeId);
+  const existingIndex = state.selectedPlaces.findIndex(p => String(p.id).trim() === cleanId);
   if (existingIndex >= 0) {
     state.selectedPlaces.splice(existingIndex, 1);
     showToast(`Removed "${place.name}"`, 'Removed from your trip plan', 'info');
   } else {
     state.selectedPlaces.push({
       ...place,
+      durationHours: Number(place.durationHours) || 2.0,
       cityId: (city && city.id) || state.currentCityId || 'danang',
       cityName: (city && city.name) || 'City',
       countryId: (city && city.countryId) || state.currentCountryId || 'vietnam',
@@ -648,14 +657,14 @@ export function togglePlaceSelection(placeId) {
 /**
  * Filter Places by Category
  */
-export function filterPlaces(category) {
+export function filterPlaces(category, evt) {
   state.currentCategoryFilter = category;
   
   document.querySelectorAll('#category-filter-tabs .filter-tab').forEach(tab => {
     tab.className = "filter-tab px-4 py-2 rounded-full text-xs font-semibold text-slate-600 hover:bg-slate-50 border border-slate-200 transition-all whitespace-nowrap";
   });
   
-  const activeTab = event ? event.target.closest('.filter-tab') : null;
+  const activeTab = (evt && evt.target) ? evt.target.closest('.filter-tab') : null;
   if (activeTab) {
     activeTab.className = "filter-tab active px-4 py-2 rounded-full text-xs font-bold transition-all whitespace-nowrap bg-[#a80c10] text-white shadow-sm";
   }
@@ -709,14 +718,22 @@ export function updateCartMetrics() {
  */
 export function toggleCartDrawer(show) {
   const drawer = document.getElementById('cart-drawer');
+  const panel = document.getElementById('cart-drawer-panel');
+  const backdrop = document.getElementById('cart-drawer-backdrop');
   if (!drawer) return;
   if (show) {
     renderDrawerPlacesList();
-    drawer.style.opacity = '1';
-    drawer.style.pointerEvents = 'auto';
+    drawer.classList.remove('hidden');
+    setTimeout(() => {
+      if (backdrop) backdrop.classList.remove('opacity-0');
+      if (panel) panel.classList.remove('translate-x-full');
+    }, 10);
   } else {
-    drawer.style.opacity = '0';
-    drawer.style.pointerEvents = 'none';
+    if (backdrop) backdrop.classList.add('opacity-0');
+    if (panel) panel.classList.add('translate-x-full');
+    setTimeout(() => {
+      drawer.classList.add('hidden');
+    }, 300);
   }
 }
 
@@ -765,8 +782,9 @@ export function renderDrawerPlacesList() {
 }
 
 export function removePlaceFromPlan(placeId) {
-  const place = state.selectedPlaces.find(p => p.id === placeId);
-  state.selectedPlaces = state.selectedPlaces.filter(p => p.id !== placeId);
+  const cleanId = String(placeId || '').trim();
+  const place = state.selectedPlaces.find(p => String(p.id).trim() === cleanId);
+  state.selectedPlaces = state.selectedPlaces.filter(p => String(p.id).trim() !== cleanId);
   try {
     localStorage.setItem('ocean_travel_plan', JSON.stringify(state.selectedPlaces));
   } catch(e) {}
@@ -1085,4 +1103,8 @@ window.OceanApp = {
   showToast
 };
 
-window.addEventListener('DOMContentLoaded', initApp);
+if (document.readyState === 'loading') {
+  window.addEventListener('DOMContentLoaded', initApp);
+} else {
+  initApp();
+}

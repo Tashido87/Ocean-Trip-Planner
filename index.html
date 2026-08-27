@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ocean Travel - Customized Trip Itinerary Builder</title>
+    
+    <!-- Google Fonts: Plus Jakarta Sans for UI & Noto Sans Myanmar for authentic Burmese translations -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Myanmar:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+    
+    <!-- Font Awesome Icons 6.5 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              brand: {
+                red: '#a80c10',
+                redHover: '#8e0a0d',
+                dark: '#2d3139',
+                navy: '#0f172a',
+                light: '#f8fafc'
+              }
+            },
+            fontFamily: {
+              sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+              myanmar: ['"Noto Sans Myanmar"', '"Plus Jakarta Sans"', 'sans-serif']
+            }
+          }
+        }
+      }
+    </script>
+
+    <!-- html2pdf.js for client-side PDF export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    
+    <!-- Canvas Confetti for Celebration Feedback -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+
+    <style>
+      body {
+        font-family: 'Plus Jakarta Sans', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        touch-action: manipulation;
+      }
+      .myanmar-text {
+        font-family: 'Noto Sans Myanmar', sans-serif;
+        line-height: 1.8;
+      }
+      .scrollbar-none::-webkit-scrollbar {
+        display: none;
+      }
+      .scrollbar-none {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+      
+      /* Mobile Smooth Animations & Transitions */
+      @keyframes fadeInUp {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      @keyframes popIn {
+        0% { transform: scale(0.92); opacity: 0; }
+        100% { transform: scale(1); opacity: 1; }
+      }
+      .view-animate {
+        animation: fadeInUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      }
+      .card-pop {
+        animation: popIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      }
+
+      /* Active tap feedback for mobile */
+      .tap-feedback:active {
+        transform: scale(0.97);
+      }
+
+      @keyframes bounceBadge {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.35); }
+      }
+      .badge-bump {
+        animation: bounceBadge 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      }
+    </style>
+  </head>
+  <body class="bg-slate-50 text-slate-800 flex flex-col min-h-screen selection:bg-red-100 selection:text-[#a80c10]">
+
+    <!-- Top Global Hotline & Contact Bar -->
+    <header class="bg-slate-900 text-slate-300 text-xs py-2 px-3 sm:px-4 border-b border-slate-800">
+      <div class="max-w-7xl mx-auto flex flex-wrap justify-between items-center gap-2">
+        <div class="flex items-center space-x-2 sm:space-x-3 text-[11px] sm:text-xs">
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-[#a80c10] text-white uppercase tracking-wider">Hotline</span>
+          <a href="tel:0996443435" class="hover:text-amber-400 transition-colors flex items-center gap-1 font-semibold">
+            <i class="fa-solid fa-phone text-amber-400"></i> 0996443435
+          </a>
+          <span class="text-slate-600">|</span>
+          <a href="viber://chat?number=%2B95996443435" target="_blank" class="hover:text-purple-400 transition-colors flex items-center gap-1 font-semibold">
+            <i class="fa-brands fa-viber text-purple-400"></i> Viber
+          </a>
+          <span class="hidden md:inline text-slate-700">|</span>
+          <a href="mailto:oceanmobile.bmo@gmail.com" class="hidden md:inline hover:text-sky-400 transition-colors">
+            <i class="fa-solid fa-envelope mr-1 text-sky-400"></i> oceanmobile.bmo@gmail.com
+          </a>
+        </div>
+        <div class="flex items-center space-x-3 text-[11px]">
+          <span class="text-slate-400 hidden sm:inline"><i class="fa-solid fa-shield-halved mr-1 text-emerald-400"></i> Best Price Guarantee</span>
+          <button onclick="window.OceanApp.openAdminModal()" class="text-slate-300 hover:text-white transition-colors flex items-center gap-1 px-2.5 py-1 rounded bg-slate-800 border border-slate-700 hover:border-slate-600">
+            <i class="fa-solid fa-lock text-[10px] text-amber-400"></i> <span id="admin-header-label">Admin Portal</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Navigation & Ocean Travel Header -->
+    <nav class="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-xs backdrop-blur-md bg-white/95">
+      <div class="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
+        <div class="flex justify-between items-center h-18 sm:h-20">
+          
+          <!-- Ocean Travel Exact Brand Logo -->
+          <div class="flex items-center cursor-pointer group py-1.5 tap-feedback" onclick="window.OceanApp.resetToCountrySelection()" title="Ocean Travel - Home">
+            <img src="/ocean-travel-logo.svg" alt="Ocean Travel - Explore. Discover. Experience." class="h-10 sm:h-12 w-auto object-contain transition-transform duration-200 group-hover:scale-105" />
+          </div>
+
+          <!-- Trip Status & Drawer Action (Top Right) -->
+          <div class="flex items-center gap-2 sm:gap-3">
+            <button id="nav-cart-btn" onclick="window.OceanApp.toggleCartDrawer(true)" class="relative flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-full bg-slate-100 border border-slate-200 text-slate-800 hover:bg-slate-900 hover:text-white transition-all duration-200 font-semibold text-xs shadow-xs group tap-feedback cursor-pointer">
+              <i class="fa-solid fa-suitcase-rolling text-sm text-[#a80c10] group-hover:text-white group-hover:rotate-12 transition-all"></i>
+              <span class="text-xs sm:text-sm font-bold">My Trip Plan</span>
+              <span id="nav-cart-count" class="bg-[#a80c10] text-white group-hover:bg-white group-hover:text-[#a80c10] text-[11px] font-bold px-2 py-0.5 rounded-full transition-colors min-w-[20px] text-center">0</span>
+            </button>
+          </div>
+
+        </div>
+      </div>
+    </nav>
+
+    <!-- Admin Status Banner (Visible when admin is active) -->
+    <div id="admin-active-bar" class="bg-amber-500 text-slate-950 text-xs px-4 py-2 font-semibold flex justify-between items-center hidden shadow-sm">
+      <div class="max-w-7xl mx-auto w-full flex flex-wrap justify-between items-center gap-2">
+        <div class="flex items-center gap-2">
+          <i class="fa-solid fa-user-shield text-slate-950"></i>
+          <span>Admin Access Active: <strong id="admin-logged-email">herozboy@gmail.com</strong> (Post Management Enabled)</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <button onclick="window.OceanApp.openAddPlaceModal()" class="px-3 py-1 bg-slate-900 text-white rounded-lg text-[11px] font-bold hover:bg-black transition-colors shadow-xs">
+            <i class="fa-solid fa-plus mr-1 text-amber-400"></i> Add New Place
+          </button>
+          <button onclick="window.OceanApp.resetDataToDefault()" class="px-2.5 py-1 bg-white/80 text-slate-900 rounded-lg text-[11px] font-bold hover:bg-white transition-colors">
+            Reset Data
+          </button>
+          <button onclick="window.OceanApp.logoutAdmin()" class="px-2 py-1 text-slate-900 hover:underline text-[11px]">
+            Logout
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Content Container -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      
+      <!-- Stepper / Breadcrumbs Bar -->
+      <div class="bg-white rounded-2xl p-4 mb-8 border border-slate-200 shadow-sm">
+        <div class="flex items-center justify-between flex-wrap gap-4">
+          <div class="flex items-center flex-wrap gap-2 text-xs sm:text-sm font-medium text-slate-500" id="breadcrumb-container">
+            <button onclick="window.OceanApp.resetToCountrySelection()" class="hover:text-[#a80c10] transition-colors flex items-center gap-1.5 font-bold text-slate-800">
+              <i class="fa-solid fa-earth-asia text-[#a80c10]"></i> 1. Select Country
+            </button>
+            <span class="text-slate-300" id="crumb-arrow-1" style="display:none;"><i class="fa-solid fa-chevron-right text-xs"></i></span>
+            <button id="crumb-city-btn" onclick="window.OceanApp.handleBreadcrumbCityClick()" class="hover:text-[#a80c10] transition-colors flex items-center gap-1.5 font-bold text-slate-800" style="display:none;">
+              <i class="fa-solid fa-city text-[#a80c10]"></i> <span id="crumb-country-name">Country</span>
+            </button>
+            <span class="text-slate-300" id="crumb-arrow-2" style="display:none;"><i class="fa-solid fa-chevron-right text-xs"></i></span>
+            <span id="crumb-place-label" class="text-slate-900 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1.5" style="display:none;">
+              <i class="fa-solid fa-map-location-dot text-[#a80c10]"></i> <span id="crumb-city-name">City</span> Attractions
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIEW 1: COUNTRY SELECTION -->
+      <section id="view-country" class="space-y-6">
+        <div class="text-center max-w-2xl mx-auto space-y-2 mb-8">
+          <span class="inline-block px-3.5 py-1 bg-red-50 text-[#a80c10] rounded-full text-[11px] font-bold tracking-widest uppercase border border-red-100">
+            Step 1: Choose Your Destination
+          </span>
+          <h1 class="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight">
+            Where would you like to travel?
+          </h1>
+          <p class="text-slate-500 text-sm sm:text-base">
+            Select a destination country to explore curated cities, iconic landmarks, and authentic culinary highlights.
+          </p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6" id="country-cards-grid">
+          <!-- Populated dynamically via JS -->
+        </div>
+      </section>
+
+      <!-- VIEW 2: CITY SELECTION -->
+      <section id="view-city" class="space-y-6" style="display: none;">
+        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-slate-200">
+          <div>
+            <button onclick="window.OceanApp.resetToCountrySelection()" class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white hover:bg-slate-100 text-xs font-bold text-slate-700 hover:text-[#a80c10] transition-colors border border-slate-200 shadow-xs mb-2">
+              <i class="fa-solid fa-arrow-left text-[#a80c10]"></i> Back to Country Selection
+            </button>
+            <h2 class="text-2xl sm:text-3xl font-extrabold text-slate-900 flex items-center gap-2">
+              <span id="city-view-country-flag"></span>
+              <span>Cities in <span id="city-view-country-name" class="text-[#a80c10]">Vietnam</span></span>
+            </h2>
+            <p class="text-slate-500 text-xs sm:text-sm mt-0.5" id="city-view-country-tagline">
+              Select a city to start customizing your attractions and activities.
+            </p>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6" id="city-cards-grid">
+          <!-- Populated dynamically via JS -->
+        </div>
+      </section>
+
+      <!-- VIEW 3: PLACES / ATTRACTIONS SELECTION -->
+      <section id="view-places" class="space-y-6" style="display: none;">
+        
+        <!-- Header Banner with City Overview -->
+        <div class="relative rounded-3xl overflow-hidden shadow-sm border border-slate-200 bg-slate-900 text-white">
+          <div class="absolute inset-0 z-0">
+            <img id="places-city-hero-img" src="" alt="City Hero" class="w-full h-full object-cover opacity-35 mix-blend-luminosity scale-105 transform hover:scale-100 transition-all duration-1000" />
+            <div class="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-900/90 to-transparent"></div>
+          </div>
+          
+          <div class="relative z-10 p-6 sm:p-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+            <div class="space-y-3 max-w-2xl">
+              <div class="flex items-center gap-2 flex-wrap">
+                <button onclick="window.OceanApp.backToCitySelection()" class="px-3.5 py-1.5 rounded-xl bg-white/20 hover:bg-white text-xs font-bold text-white hover:text-slate-900 backdrop-blur-md transition-all flex items-center gap-2 border border-white/20 shadow-sm cursor-pointer">
+                  <i class="fa-solid fa-arrow-left text-amber-300"></i> Back to Cities
+                </button>
+                <button onclick="window.OceanApp.resetToCountrySelection()" class="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-medium text-slate-200 backdrop-blur-md transition-all flex items-center gap-1.5 border border-white/10">
+                  <i class="fa-solid fa-earth-asia text-slate-400"></i> Change Country
+                </button>
+                <span class="text-xs bg-[#a80c10] text-white font-bold px-3 py-1.5 rounded-xl uppercase tracking-wider shadow-xs" id="places-city-badge">Vietnam</span>
+              </div>
+              <h1 class="text-2xl sm:text-4xl font-extrabold tracking-tight text-white" id="places-city-title">Explore Da Nang</h1>
+              <p class="text-slate-300 text-xs sm:text-sm" id="places-city-tagline">
+                Select your must-visit attractions, authentic street foods, and cultural gems.
+              </p>
+            </div>
+
+            <!-- Quick Stats in Banner -->
+            <div class="flex items-center gap-3 bg-black/40 backdrop-blur-md p-3.5 rounded-2xl border border-white/10">
+              <div class="text-center px-3.5 border-r border-white/10">
+                <div class="text-[11px] text-slate-400 font-medium uppercase tracking-wider">Available</div>
+                <div class="text-xl font-black text-white" id="places-available-count">0</div>
+              </div>
+              <div class="text-center px-3.5">
+                <div class="text-[11px] text-slate-400 font-medium uppercase tracking-wider">Selected</div>
+                <div class="text-xl font-black text-amber-400" id="places-selected-city-count">0</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Navigation Sub-Bar with Clear Back Button -->
+        <div class="flex items-center justify-between gap-4">
+          <button onclick="window.OceanApp.backToCitySelection()" class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white hover:bg-slate-100 text-xs font-bold text-slate-700 hover:text-[#a80c10] border border-slate-200 shadow-xs transition-colors cursor-pointer">
+            <i class="fa-solid fa-arrow-left text-[#a80c10]"></i> Back to City Selection
+          </button>
+          <span class="text-xs text-slate-500 font-medium hidden sm:inline">
+            Click on any card to view detailed overview & highlights
+          </span>
+        </div>
+
+        <!-- Filter & Search Controls -->
+        <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4">
+          
+          <!-- Category Tabs -->
+          <div class="flex items-center gap-2 overflow-x-auto pb-1 md:pb-0 scrollbar-none" id="category-filter-tabs">
+            <button onclick="window.OceanApp.filterPlaces('all')" class="filter-tab active px-4 py-2 rounded-full text-xs font-bold transition-all whitespace-nowrap bg-[#a80c10] text-white shadow-sm">
+              All Places
+            </button>
+            <button onclick="window.OceanApp.filterPlaces('must_visit')" class="filter-tab px-4 py-2 rounded-full text-xs font-semibold text-slate-600 hover:bg-slate-50 border border-slate-200 transition-all whitespace-nowrap">
+              ⭐ Top Picks
+            </button>
+            <button onclick="window.OceanApp.filterPlaces('food')" class="filter-tab px-4 py-2 rounded-full text-xs font-semibold text-slate-600 hover:bg-slate-50 border border-slate-200 transition-all whitespace-nowrap">
+              🍜 Food & Dining
+            </button>
+            <button onclick="window.OceanApp.filterPlaces('culture')" class="filter-tab px-4 py-2 rounded-full text-xs font-semibold text-slate-600 hover:bg-slate-50 border border-slate-200 transition-all whitespace-nowrap">
+              🏛️ Heritage & Culture
+            </button>
+            <button onclick="window.OceanApp.filterPlaces('nature')" class="filter-tab px-4 py-2 rounded-full text-xs font-semibold text-slate-600 hover:bg-slate-50 border border-slate-200 transition-all whitespace-nowrap">
+              🌿 Nature & Views
+            </button>
+          </div>
+
+          <!-- Search Input -->
+          <div class="relative min-w-[240px]">
+            <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+            <input type="text" id="place-search-input" oninput="window.OceanApp.handleSearchPlaces(this.value)" placeholder="Search attractions..." class="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-full text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-red-500/20 focus:border-[#a80c10] transition-all" />
+          </div>
+
+        </div>
+
+        <!-- Places List Grid (One-by-one individual layout with beautiful photos) -->
+        <div class="space-y-4" id="places-cards-list">
+          <!-- Populated dynamically via JS -->
+        </div>
+
+      </section>
+
+    </main>
+
+    <!-- STICKY BOTTOM SUMMARY BAR -->
+    <div id="sticky-cart-bar" class="fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur-lg border-t border-slate-200 shadow-xl z-50 transition-all duration-300 py-3.5 px-4 sm:px-8">
+      <div class="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+        
+        <!-- Left: Summary Stats -->
+        <div class="flex items-center gap-4 w-full sm:w-auto justify-between sm:justify-start">
+          <div class="flex items-center gap-3">
+            <div class="w-11 h-11 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-base shadow-sm">
+              <i class="fa-solid fa-map-marked-alt text-amber-400"></i>
+            </div>
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="font-extrabold text-slate-900 text-sm sm:text-base">Trip Summary</span>
+                <span id="cart-badge-count" class="bg-red-50 text-[#a80c10] text-xs font-bold px-2.5 py-0.5 rounded-full border border-red-200">0 Places Selected</span>
+              </div>
+              <div class="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+                <span class="font-bold text-[#a80c10]" id="cart-total-hours">0 Hours Total</span>
+                <span>•</span>
+                <span class="font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md" id="cart-estimated-days">Estimated ~0.0 Touring Days</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Mobile view plan toggle -->
+          <button onclick="window.OceanApp.toggleCartDrawer(true)" class="sm:hidden text-[#a80c10] font-bold text-xs flex items-center gap-1 underline underline-offset-4">
+            View Details <i class="fa-solid fa-chevron-up text-[10px]"></i>
+          </button>
+        </div>
+
+        <!-- Right: Actions -->
+        <div class="flex items-center gap-3 w-full sm:w-auto">
+          <button onclick="window.OceanApp.toggleCartDrawer(true)" class="flex-1 sm:flex-initial px-4 py-2.5 rounded-full border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs transition-colors flex items-center justify-center gap-2 shadow-sm">
+            <i class="fa-solid fa-list-check text-slate-400"></i> Review List (<span id="cart-btn-count">0</span>)
+          </button>
+          <button id="btn-generate-pdf-bottom" onclick="window.OceanApp.prepareAndGeneratePDF()" class="flex-1 sm:flex-initial px-6 py-2.5 rounded-full bg-[#a80c10] hover:bg-[#8e0a0d] text-white font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-2 shadow-sm shadow-red-900/25 active:scale-95">
+            <i class="fa-solid fa-file-pdf"></i> Generate Trip Plan
+          </button>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- INTERACTIVE FLOATING TOAST NOTIFICATION -->
+    <div id="toast-notification" class="fixed top-20 right-4 sm:right-6 z-50 transform -translate-y-12 opacity-0 pointer-events-none transition-all duration-300 max-w-sm w-[calc(100%-2rem)] sm:w-auto bg-slate-900 text-white p-3.5 sm:p-4 rounded-2xl shadow-2xl flex items-center justify-between gap-3 border border-slate-700/80 backdrop-blur-md">
+      <div class="flex items-center gap-3 min-w-0">
+        <div id="toast-icon-box" class="w-8 h-8 rounded-xl bg-[#a80c10] text-white flex items-center justify-center flex-shrink-0 text-sm">
+          <i class="fa-solid fa-check"></i>
+        </div>
+        <div class="min-w-0">
+          <div id="toast-title" class="text-xs sm:text-sm font-bold text-white truncate">Added to Trip Plan</div>
+          <div id="toast-subtitle" class="text-[10px] sm:text-xs text-slate-300 truncate">Tap to review your itinerary</div>
+        </div>
+      </div>
+      <button id="toast-action-btn" onclick="window.OceanApp.toggleCartDrawer(true)" class="px-3 py-1.5 rounded-xl bg-white/20 hover:bg-white text-white hover:text-slate-900 text-xs font-bold transition-all flex-shrink-0 cursor-pointer">
+        View Plan
+      </button>
+    </div>
+
+    <!-- SLIDEOVER DRAWER: TRIP PLANNER FULL DETAILS -->
+    <div id="cart-drawer" class="fixed inset-0 z-50 overflow-hidden pointer-events-none transition-all duration-300" style="opacity: 0;">
+      <!-- Backdrop -->
+      <div class="absolute inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity" onclick="window.OceanApp.toggleCartDrawer(false)"></div>
+
+      <div class="fixed inset-y-0 right-0 max-w-full flex pl-10">
+        <div class="w-screen max-w-md sm:max-w-lg bg-white shadow-2xl flex flex-col pointer-events-auto border-l border-slate-200">
+          
+          <!-- Drawer Header -->
+          <div class="p-6 bg-white border-b border-slate-200 flex justify-between items-center">
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-xl bg-slate-900 flex items-center justify-center text-white font-bold shadow-sm">
+                <i class="fa-solid fa-map-location-dot text-amber-400"></i>
+              </div>
+              <div>
+                <h3 class="font-extrabold text-lg text-slate-900">Trip Summary</h3>
+                <p class="text-xs text-slate-400">Ocean Travel Itinerary Builder</p>
+              </div>
+            </div>
+            <button onclick="window.OceanApp.toggleCartDrawer(false)" class="text-slate-400 hover:text-slate-700 p-2 rounded-lg hover:bg-slate-100 transition-colors">
+              <i class="fa-solid fa-xmark text-lg"></i>
+            </button>
+          </div>
+
+          <!-- Traveler Details Customization Form for PDF -->
+          <div class="p-4 bg-slate-50 border-b border-slate-200">
+            <div class="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center justify-between">
+              <span>Client / Trip Info (For PDF Header)</span>
+              <span class="text-[10px] text-[#a80c10] font-semibold lowercase">optional</span>
+            </div>
+            <div class="grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <label class="block text-[11px] text-slate-500 mb-1 font-medium">Client Name</label>
+                <input type="text" id="traveler-name-input" placeholder="e.g., Ko Min Thant" class="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-red-500 focus:border-[#a80c10]" />
+              </div>
+              <div>
+                <label class="block text-[11px] text-slate-500 mb-1 font-medium">Travel Date / Month</label>
+                <input type="text" id="travel-dates-input" placeholder="e.g., Nov 2026 / 4 Days" class="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-red-500 focus:border-[#a80c10]" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Drawer Content: Selected Places List -->
+          <div class="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3" id="drawer-places-list">
+            <!-- Dynamically populated -->
+          </div>
+
+          <!-- Drawer Footer with Total Metrics & PDF Action -->
+          <div class="p-4 sm:p-6 bg-slate-50 border-t border-slate-200 space-y-4">
+            
+            <div class="bg-white p-4 rounded-xl border border-slate-200 space-y-2">
+              <div class="flex justify-between items-center text-xs text-slate-600 pb-1 border-b border-slate-100">
+                <span class="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Selected Places</span>
+                <span class="font-bold text-slate-900" id="drawer-summary-places-count">0 items</span>
+              </div>
+              <div class="flex justify-between items-center text-xs text-slate-600">
+                <span class="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Total Duration</span>
+                <span class="font-bold text-slate-900 text-lg" id="drawer-summary-hours">0 <span class="text-xs font-medium text-slate-500">Hours</span></span>
+              </div>
+              <div class="flex justify-between items-center text-xs text-slate-600 pt-1 border-t border-slate-100">
+                <span class="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Estimated Days</span>
+                <span class="text-sm font-bold text-[#a80c10] italic" id="drawer-summary-days">~0.0 Days</span>
+              </div>
+              <p class="text-[10px] text-slate-400 leading-relaxed pt-1">
+                * Based on 8-hour touring days. Transport time between locations not included.
+              </p>
+            </div>
+
+            <div class="flex gap-2">
+              <button onclick="window.OceanApp.clearAllSelectedPlaces()" class="px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-sm">
+                <i class="fa-regular fa-trash-can"></i> Clear
+              </button>
+              <button onclick="window.OceanApp.prepareAndGeneratePDF()" class="flex-1 py-3 bg-[#a80c10] text-white rounded-xl font-bold text-xs sm:text-sm tracking-wide hover:bg-[#8e0a0d] transition-colors shadow-sm flex items-center justify-center gap-2">
+                <i class="fa-solid fa-file-pdf"></i> GENERATE TRIP PLAN
+              </button>
+            </div>
+
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ADMIN LOGIN MODAL -->
+    <div id="admin-login-modal" class="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 hidden">
+      <div class="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-5">
+        <div class="flex justify-between items-start">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-slate-900 flex items-center justify-center text-white text-lg">
+              <i class="fa-solid fa-user-shield text-amber-400"></i>
+            </div>
+            <div>
+              <h3 class="font-extrabold text-slate-900 text-base">Admin Portal Login</h3>
+              <p class="text-xs text-slate-400">Ocean Travel Management Access</p>
+            </div>
+          </div>
+          <button onclick="window.OceanApp.closeAdminModal()" class="text-slate-400 hover:text-slate-600 p-1">
+            <i class="fa-solid fa-xmark text-lg"></i>
+          </button>
+        </div>
+
+        <form onsubmit="window.OceanApp.handleAdminLogin(event)" class="space-y-4">
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1">Admin Email Address</label>
+            <input type="email" id="admin-email-input" value="herozboy@gmail.com" required class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-red-500/20 focus:border-[#a80c10]" />
+            <p class="text-[10px] text-slate-400 mt-1">Authorized admin address: <span class="font-mono text-slate-600">herozboy@gmail.com</span></p>
+          </div>
+
+          <div class="pt-2 flex gap-2">
+            <button type="button" onclick="window.OceanApp.closeAdminModal()" class="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-50">
+              Cancel
+            </button>
+            <button type="submit" class="flex-1 py-2.5 bg-[#a80c10] hover:bg-[#8e0a0d] text-white rounded-xl text-xs font-bold shadow-sm">
+              Log In as Admin
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ADMIN ADD / EDIT PLACE MODAL -->
+    <div id="place-edit-modal" class="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 hidden">
+      <div class="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl border border-slate-200 space-y-6 max-h-[90vh] overflow-y-auto">
+        <div class="flex justify-between items-start border-b border-slate-100 pb-4">
+          <div>
+            <h3 class="font-extrabold text-slate-900 text-lg" id="place-modal-title">Manage Place / Post</h3>
+            <p class="text-xs text-slate-400">Add or edit attraction details, Myanmar translation & photo</p>
+          </div>
+          <button onclick="window.OceanApp.closePlaceModal()" class="text-slate-400 hover:text-slate-600 p-1">
+            <i class="fa-solid fa-xmark text-lg"></i>
+          </button>
+        </div>
+
+        <form onsubmit="window.OceanApp.handleSavePlace(event)" class="space-y-4 text-xs">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block font-bold text-slate-700 mb-1">Destination City</label>
+              <select id="edit-city-select" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl">
+                <option value="danang">Da Nang (Vietnam)</option>
+                <option value="hanoi">Hanoi (Vietnam)</option>
+                <option value="hochiminh">Ho Chi Minh (Vietnam)</option>
+                <option value="singapore_city">Singapore</option>
+                <option value="kualalumpur">Kuala Lumpur (Malaysia)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block font-bold text-slate-700 mb-1">Category</label>
+              <select id="edit-category-select" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl">
+                <option value="must_visit">⭐ Top Pick / Must Visit</option>
+                <option value="food">🍜 Food & Dining</option>
+                <option value="culture">🏛️ Heritage & Culture</option>
+                <option value="nature">🌿 Nature & Views</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div class="sm:col-span-2">
+              <label class="block font-bold text-slate-700 mb-1">Place Name (English)</label>
+              <input type="text" id="edit-name-input" required placeholder="e.g. Golden Bridge" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl" />
+            </div>
+            <div>
+              <label class="block font-bold text-slate-700 mb-1">Duration (Hours)</label>
+              <input type="number" step="0.5" id="edit-duration-input" required placeholder="2.5" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 mb-1">Photo Image URL</label>
+            <input type="url" id="edit-image-input" required placeholder="https://images.unsplash.com/..." class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl" />
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 mb-1">Location / Address</label>
+            <input type="text" id="edit-location-input" placeholder="e.g. Ba Na Hills, Da Nang" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl" />
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 mb-1">Myanmar Description (မြန်မာဘာသာဖြင့် ဖော်ပြချက်)</label>
+            <textarea id="edit-myanmar-desc-input" rows="3" placeholder="အသေးစိတ် ရှင်းလင်းချက်..." class="myanmar-text w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"></textarea>
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 mb-1">Key Highlights (One per line)</label>
+            <textarea id="edit-highlights-input" rows="2" placeholder="Highlight 1&#10;Highlight 2" class="myanmar-text w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"></textarea>
+          </div>
+
+          <div class="flex items-center gap-2 pt-1">
+            <input type="checkbox" id="edit-mustvisit-check" class="rounded text-[#a80c10] focus:ring-red-500 w-4 h-4" />
+            <label for="edit-mustvisit-check" class="font-semibold text-slate-700">Mark as Top Pick / Must-Visit</label>
+          </div>
+
+          <div class="pt-4 flex gap-2 border-t border-slate-100">
+            <button type="button" onclick="window.OceanApp.closePlaceModal()" class="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-50">
+              Cancel
+            </button>
+            <button type="submit" class="flex-1 py-2.5 bg-[#a80c10] hover:bg-[#8e0a0d] text-white rounded-xl text-xs font-bold shadow-sm">
+              Save Place Post
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- HIDDEN PDF EXPORT PRINTABLE TEMPLATE -->
+    <div id="pdf-printable-wrapper" class="hidden">
+      <div id="pdf-content-to-print" class="p-8 bg-white text-slate-800 font-sans max-w-[800px] mx-auto space-y-6" style="font-family: 'Plus Jakarta Sans', 'Noto Sans Myanmar', sans-serif;">
+        
+        <!-- Header Banner: Ocean Travel Official Logo & Details -->
+        <div class="border-b-2 border-[#a80c10] pb-5 flex justify-between items-start">
+          <div class="space-y-1">
+            <img src="/ocean-travel-logo.svg" alt="Ocean Travel" class="h-11 w-auto object-contain" />
+            <div class="text-[11px] text-slate-500 pt-1">
+              Official Customized Trip Itinerary & Travel Plan
+            </div>
+          </div>
+
+          <div class="text-right text-xs space-y-1 text-slate-600">
+            <div class="font-bold text-slate-900 text-sm">Ocean Travel Agency</div>
+            <div>Phone & Viber: 0996443435</div>
+            <div>Email: oceanmobile.bmo@gmail.com</div>
+            <div class="text-[10px] text-slate-400" id="pdf-generated-date">Date: </div>
+          </div>
+        </div>
+
+        <!-- Trip Overview Card -->
+        <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
+          <div>
+            <div class="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Client Name</div>
+            <div class="font-bold text-slate-900 text-sm" id="pdf-client-name">Valued Client</div>
+          </div>
+          <div>
+            <div class="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Destination</div>
+            <div class="font-bold text-[#a80c10] text-sm" id="pdf-destination-name">-</div>
+          </div>
+          <div>
+            <div class="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Total Duration</div>
+            <div class="font-bold text-slate-900 text-sm" id="pdf-total-hours">0 Hours</div>
+          </div>
+          <div>
+            <div class="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Estimated Duration</div>
+            <div class="font-bold text-[#a80c10] text-sm" id="pdf-total-days">~0 Days</div>
+          </div>
+        </div>
+
+        <!-- Itinerary Places List -->
+        <div>
+          <div class="flex justify-between items-center mb-3">
+            <h3 class="font-extrabold text-base text-slate-900 uppercase tracking-wide flex items-center gap-2">
+              <span class="w-2.5 h-2.5 bg-[#a80c10] rounded-full"></span> Selected Attractions & Itinerary
+            </h3>
+            <span class="text-xs font-semibold text-slate-500" id="pdf-item-count-label">0 Places Chosen</span>
+          </div>
+
+          <div class="space-y-3" id="pdf-places-list-container">
+            <!-- Populated via JS for print -->
+          </div>
+        </div>
+
+        <!-- Travel Notes & Ocean Travel Assurance -->
+        <div class="border-t border-slate-200 pt-4 grid grid-cols-2 gap-4 text-[11px] text-slate-600">
+          <div class="p-3 bg-amber-50 rounded-lg border border-amber-200/60">
+            <div class="font-bold text-amber-900 mb-1"><i class="fa-solid fa-circle-info mr-1 text-[#a80c10]"></i> Travel Advisory & Tips (ခရီးသွားလမ်းညွှန်)</div>
+            <p class="myanmar-text text-[10px] text-amber-950">
+              ဖော်ပြပါ လည်ပတ်ချိန်များသည် ခန့်မှန်းခြေဖြစ်ပြီး ယာဉ်ကြောအခြေအနေနှင့် ရာသီဥတုအလိုက် အနည်းငယ် ကွဲလွဲမှု ရှိနိုင်ပါသည်။ လေဆိပ်ကြိုပို့နှင့် ဟိုတယ်ဘိုကင်များကို Ocean Travel မှ အပြည့်အဝ စီစဉ်ပေးပါသည်။
+            </p>
+          </div>
+          <div class="p-3 bg-slate-50 rounded-lg border border-slate-200">
+            <div class="font-bold text-slate-800 mb-1"><i class="fa-solid fa-headset mr-1 text-[#a80c10]"></i> 24/7 Dedicated Support</div>
+            <p class="text-[10px] text-slate-600">
+              For bookings, vehicle rentals, or tour adjustments, contact Ocean Travel at 0996443435 or oceanmobile.bmo@gmail.com.
+            </p>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="border-t border-slate-200 pt-3 text-center text-[10px] text-slate-400">
+          Ocean Travel Agency • 0996443435 (Phone & Viber) • oceanmobile.bmo@gmail.com • Have a pleasant journey!
+        </div>
+
+      </div>
+    </div>
+
+    <!-- MAIN APP SCRIPT -->
+    <script type="module" src="/src/app.js"></script>
+
+  </body>
+</html>

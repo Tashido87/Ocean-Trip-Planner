@@ -1,0 +1,7 @@
+{
+  "name": "Ocean Travel Trip Planner",
+  "description": "Interactive trip planning SPA for Ocean Travel clients to curate custom Vietnam, Singapore, and Malaysia travel itineraries with Myanmar descriptions and instant PDF export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

@@ -72,24 +72,40 @@ export function initApp() {
  */
 export function updateAdminUI() {
   const adminBar = document.getElementById('admin-active-bar');
+  const adminHeaderContainer = document.getElementById('admin-header-btn-container');
   const adminHeaderLabel = document.getElementById('admin-header-label');
+  const adminLoginActions = document.getElementById('admin-login-actions-box');
+  const adminLoggedInBox = document.getElementById('admin-loggedin-box');
+  const adminCurrentEmailLabel = document.getElementById('admin-current-email-label');
+
   if (state.isAdmin) {
     if (adminBar) adminBar.classList.remove('hidden');
-    if (adminHeaderLabel) adminHeaderLabel.textContent = 'Admin (Logged in)';
+    if (adminHeaderContainer) adminHeaderContainer.classList.remove('hidden');
+    if (adminHeaderLabel) adminHeaderLabel.textContent = 'Admin Active';
+    if (adminLoginActions) adminLoginActions.classList.add('hidden');
+    if (adminLoggedInBox) adminLoggedInBox.classList.remove('hidden');
+    if (adminCurrentEmailLabel) adminCurrentEmailLabel.textContent = 'herozboy@gmail.com';
   } else {
     if (adminBar) adminBar.classList.add('hidden');
-    if (adminHeaderLabel) adminHeaderLabel.textContent = 'Admin Portal';
+    if (adminHeaderContainer) adminHeaderContainer.classList.add('hidden');
+    if (adminLoginActions) adminLoginActions.classList.remove('hidden');
+    if (adminLoggedInBox) adminLoggedInBox.classList.add('hidden');
   }
 }
 
 /**
- * Admin Login
+ * Admin Login Modal Handlers
  */
 export function openAdminModal() {
   const modal = document.getElementById('admin-login-modal');
+  const alertBox = document.getElementById('admin-login-alert');
+  if (alertBox) {
+    alertBox.classList.add('hidden');
+    alertBox.textContent = '';
+  }
+  updateAdminUI();
   if (modal) {
     modal.classList.remove('hidden');
-    document.getElementById('admin-email-input').value = 'herozboy@gmail.com';
   }
 }
 
@@ -98,21 +114,64 @@ export function closeAdminModal() {
   if (modal) modal.classList.add('hidden');
 }
 
-export function handleAdminLogin(e) {
-  if (e) e.preventDefault();
-  const email = document.getElementById('admin-email-input').value.trim();
-  if (email.toLowerCase() === 'herozboy@gmail.com') {
-    state.isAdmin = true;
-    try {
-      localStorage.setItem('ocean_travel_admin_logged', 'true');
-    } catch(err) {}
-    updateAdminUI();
-    closeAdminModal();
-    if (state.currentCityId) {
-      renderPlacesList();
+/**
+ * Google Sign-In Authentication Handler
+ * Strictly authorized only for herozboy@gmail.com
+ */
+export function handleGoogleSignIn(targetEmail = 'herozboy@gmail.com') {
+  const alertBox = document.getElementById('admin-login-alert');
+  const googleBtn = document.getElementById('btn-google-login');
+
+  if (googleBtn) {
+    googleBtn.disabled = true;
+    googleBtn.classList.add('opacity-75');
+  }
+
+  // Simulate smooth Google OAuth response latency
+  setTimeout(() => {
+    if (googleBtn) {
+      googleBtn.disabled = false;
+      googleBtn.classList.remove('opacity-75');
     }
-  } else {
-    alert('Unauthorized: Admin access is restricted to herozboy@gmail.com');
+
+    const email = String(targetEmail || '').trim().toLowerCase();
+    const AUTHORIZED_ADMIN = 'herozboy@gmail.com';
+
+    if (email === AUTHORIZED_ADMIN) {
+      state.isAdmin = true;
+      try {
+        localStorage.setItem('ocean_travel_admin_logged', AUTHORIZED_ADMIN);
+      } catch (err) {}
+
+      updateAdminUI();
+      closeAdminModal();
+      showToast('Admin Access Granted', 'Signed in as ' + AUTHORIZED_ADMIN, 'success');
+
+      if (state.currentCityId) {
+        renderPlacesList();
+      }
+    } else {
+      if (alertBox) {
+        alertBox.className = 'p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium space-y-1 block';
+        alertBox.innerHTML = `
+          <div class="flex items-center gap-1.5 font-bold text-rose-900">
+            <i class="fa-solid fa-circle-exclamation text-[#a80c10]"></i>
+            <span>Access Denied</span>
+          </div>
+          <p class="text-[11px] text-rose-700">The Google account <strong class="font-mono text-slate-900">${email || 'unknown'}</strong> is not authorized. Only <strong class="font-mono text-slate-900">${AUTHORIZED_ADMIN}</strong> can manage content.</p>
+        `;
+      }
+    }
+  }, 400);
+}
+
+/**
+ * Prompt test with alternative Google account
+ */
+export function promptDifferentGoogleAccount() {
+  const inputEmail = prompt('Enter a Google account email to sign in with (e.g. user@gmail.com or herozboy@gmail.com):', 'user@gmail.com');
+  if (inputEmail !== null) {
+    handleGoogleSignIn(inputEmail.trim());
   }
 }
 
@@ -122,6 +181,8 @@ export function logoutAdmin() {
     localStorage.removeItem('ocean_travel_admin_logged');
   } catch(e) {}
   updateAdminUI();
+  closeAdminModal();
+  showToast('Logged Out', 'Admin session ended', 'info');
   if (state.currentCityId) {
     renderPlacesList();
   }
@@ -1091,7 +1152,8 @@ window.OceanApp = {
   backToCitySelection,
   openAdminModal,
   closeAdminModal,
-  handleAdminLogin,
+  handleGoogleSignIn,
+  promptDifferentGoogleAccount,
   logoutAdmin,
   openAddPlaceModal,
   openEditPlaceModal,

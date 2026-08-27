@@ -1,4 +1,8 @@
 import { defaultTravelData } from './travelData.js';
+import { db, doc, getDoc, setDoc, onSnapshot } from './firebase.js';
+
+// Reference to the shared master travel catalog document in Firebase Firestore
+const CATALOG_DOC_REF = doc(db, 'ocean_travel', 'catalog');
 
 /**
  * State Management
@@ -12,9 +16,22 @@ export const state = {
   selectedPlaces: [],
   isAdmin: false,
   editingPlaceId: null,
+  modalImages: [],
+  modalImageTab: 'visual',
+  cloudSyncStatus: 'connecting',
+  lastSyncedTime: null,
+  lightbox: {
+    isOpen: false,
+    placeId: null,
+    currentImageIndex: 0,
+    images: [],
+    placeTitle: '',
+    categoryLabel: '',
+    caption: ''
+  }
 };
 
-// Load persistent data
+// Load initial persistent data from local storage as immediate render cache
 let travelData = JSON.parse(JSON.stringify(defaultTravelData));
 try {
   const savedData = localStorage.getItem('ocean_travel_custom_data');
@@ -24,6 +41,32 @@ try {
 } catch (e) {
   console.warn('Could not load custom data:', e);
 }
+
+// Data Migration: Ensure every place has an `images` array with 3-5 photos
+function ensureValidPlaceImages(dataObj) {
+  try {
+    if (dataObj && dataObj.cities) {
+      Object.values(dataObj.cities).forEach(city => {
+        if (city && city.places) {
+          city.places.forEach(p => {
+            if (!p.images || !Array.isArray(p.images) || p.images.length === 0) {
+              const defaultCity = defaultTravelData.cities[city.id];
+              const defaultPlace = defaultCity ? defaultCity.places.find(dp => dp.id === p.id) : null;
+              if (defaultPlace && defaultPlace.images && defaultPlace.images.length > 0) {
+                p.images = [...defaultPlace.images];
+              } else if (p.imageUrl) {
+                p.images = [p.imageUrl];
+              }
+            }
+          });
+        }
+      });
+    }
+  } catch (e) {
+    console.warn('Image migration check error:', e);
+  }
+}
+ensureValidPlaceImages(travelData);
 
 try {
   const savedPlan = localStorage.getItem('ocean_travel_plan');
@@ -36,19 +79,153 @@ try {
 
 try {
   const adminLoggedIn = localStorage.getItem('ocean_travel_admin_logged');
-  if (adminLoggedIn === 'true') {
+  if (adminLoggedIn === 'true' || adminLoggedIn === 'herozboy@gmail.com') {
     state.isAdmin = true;
   }
 } catch (e) {}
 
 /**
- * Save custom travel data
+ * Update UI Sync Status Indicators (Navbar & Admin banner)
  */
-export function saveTravelData() {
+export function updateSyncStatusUI(status, message) {
+  state.cloudSyncStatus = status;
+  
+  const badge = document.getElementById('cloud-sync-badge');
+  const dot = document.getElementById('cloud-sync-dot');
+  const text = document.getElementById('cloud-sync-text');
+  const adminBadgeText = document.getElementById('admin-cloud-sync-text');
+  
+  if (text) text.textContent = message || 'Firebase Cloud Synced';
+  if (adminBadgeText) {
+    if (status === 'saving') {
+      adminBadgeText.textContent = 'Syncing to Firebase...';
+    } else if (status === 'synced') {
+      adminBadgeText.textContent = 'Firebase Cloud Live';
+    } else if (status === 'connecting') {
+      adminBadgeText.textContent = 'Connecting Firebase...';
+    } else {
+      adminBadgeText.textContent = 'Offline (Local Backup)';
+    }
+  }
+
+  if (!badge) return;
+
+  if (status === 'synced') {
+    badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200';
+    if (dot) dot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse';
+  } else if (status === 'saving') {
+    badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200';
+    if (dot) dot.className = 'w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping';
+  } else if (status === 'connecting') {
+    badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-sky-50 text-sky-700 border border-sky-200';
+    if (dot) dot.className = 'w-1.5 h-1.5 rounded-full bg-sky-500 animate-pulse';
+  } else if (status === 'error') {
+    badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 border border-rose-200';
+    if (dot) dot.className = 'w-1.5 h-1.5 rounded-full bg-rose-500';
+  }
+}
+
+/**
+ * Subscribe to Real-time Firebase Firestore Updates
+ */
+export function subscribeToFirestoreUpdates() {
+  updateSyncStatusUI('connecting', 'Connecting to Firebase...');
+
+  try {
+    const unsubscribe = onSnapshot(CATALOG_DOC_REF, async (docSnap) => {
+      if (docSnap.exists()) {
+        const remoteData = docSnap.data();
+        if (remoteData && remoteData.cities && remoteData.countries) {
+          console.log('Firebase Firestore remote sync received:', remoteData);
+          ensureValidPlaceImages(remoteData);
+          travelData = remoteData;
+          
+          // Cache locally as backup
+          try {
+            localStorage.setItem('ocean_travel_custom_data', JSON.stringify(travelData));
+          } catch (e) {}
+
+          state.lastSyncedTime = new Date();
+          updateSyncStatusUI('synced', 'Firebase Cloud Synced');
+
+          // Refresh current views with updated data
+          if (state.currentCountryId) {
+            if (state.currentCityId) {
+              renderPlacesList();
+            } else {
+              renderCityCards();
+            }
+          } else {
+            renderCountries();
+          }
+          updateCartMetrics();
+          renderDrawerPlacesList();
+        }
+      } else {
+        // Document does not exist yet on cloud Firestore; seed initial data
+        console.log('Catalog not found on Firebase. Initializing default master data...');
+        updateSyncStatusUI('saving', 'Initializing Firebase catalog...');
+        try {
+          await setDoc(CATALOG_DOC_REF, travelData);
+          updateSyncStatusUI('synced', 'Firebase Initialized & Synced');
+        } catch (initErr) {
+          console.warn('Failed to auto-seed Firebase:', initErr);
+          updateSyncStatusUI('synced', 'Firebase Cloud Synced');
+        }
+      }
+    }, (err) => {
+      console.error('Firebase onSnapshot listener error:', err);
+      updateSyncStatusUI('error', 'Cloud sync offline (Local Mode)');
+    });
+
+    return unsubscribe;
+  } catch (e) {
+    console.error('Failed to attach Firebase snapshot listener:', e);
+    updateSyncStatusUI('error', 'Firebase offline');
+  }
+}
+
+/**
+ * Save custom travel data to localStorage and sync with Firebase Firestore
+ */
+export async function saveTravelData() {
+  // 1. Immediate local save for resilience
   try {
     localStorage.setItem('ocean_travel_custom_data', JSON.stringify(travelData));
   } catch (e) {
-    console.error('Failed to save data:', e);
+    console.error('Failed to save locally:', e);
+  }
+
+  // 2. Real-time Cloud Save to Firebase Firestore
+  updateSyncStatusUI('saving', 'Syncing to Firebase Cloud...');
+  try {
+    await setDoc(CATALOG_DOC_REF, travelData);
+    state.lastSyncedTime = new Date();
+    updateSyncStatusUI('synced', 'Firebase Cloud Synced');
+    console.log('Data successfully saved & synced to Firebase Firestore!');
+  } catch (err) {
+    console.error('Failed to sync to Firebase Firestore:', err);
+    updateSyncStatusUI('error', 'Sync failed (saved locally)');
+    showToast('Cloud Sync Notice', 'Saved locally. Changes will sync to Firebase when online.', 'info');
+  }
+}
+
+/**
+ * Reset all travel data to defaults and sync with Firebase Firestore
+ */
+export async function resetDataToDefault() {
+  if (confirm('Are you sure you want to reset all destinations and places to default master catalog? This will update Firebase Cloud for all users.')) {
+    travelData = JSON.parse(JSON.stringify(defaultTravelData));
+    await saveTravelData();
+    renderCountries();
+    if (state.currentCountryId) {
+      if (state.currentCityId) {
+        renderPlacesList();
+      } else {
+        renderCityCards();
+      }
+    }
+    showToast('Reset Complete', 'Master catalog reset and synchronized with Firebase Cloud', 'success');
   }
 }
 
@@ -65,6 +242,10 @@ export function initApp() {
   updateAdminUI();
   renderCountries();
   updateCartMetrics();
+  setupLightboxEvents();
+  
+  // Start real-time Firebase Firestore synchronization
+  subscribeToFirestoreUpdates();
 }
 
 /**
@@ -189,20 +370,6 @@ export function logoutAdmin() {
 }
 
 /**
- * Reset data to defaults
- */
-export function resetDataToDefault() {
-  if (confirm('Are you sure you want to reset all destination places to original curated data?')) {
-    travelData = JSON.parse(JSON.stringify(defaultTravelData));
-    saveTravelData();
-    if (state.currentCityId) {
-      renderPlacesList();
-    }
-    alert('Data reset successfully to default.');
-  }
-}
-
-/**
  * Render Step 1: Countries
  */
 export function renderCountries() {
@@ -249,86 +416,88 @@ export function selectCountry(countryId) {
   const country = travelData.countries.find(c => c.id === countryId);
   if (!country) return;
 
-  // Update Breadcrumb
-  document.getElementById('crumb-arrow-1').style.display = 'inline-block';
-  document.getElementById('crumb-city-btn').style.display = 'inline-flex';
-  document.getElementById('crumb-country-name').textContent = country.name;
-  document.getElementById('crumb-arrow-2').style.display = 'none';
-  document.getElementById('crumb-place-label').style.display = 'none';
+  // Update Breadcrumbs
+  const crumbArrow1 = document.getElementById('crumb-arrow-1');
+  const crumbCityBtn = document.getElementById('crumb-city-btn');
+  const crumbCountryName = document.getElementById('crumb-country-name');
+  const crumbArrow2 = document.getElementById('crumb-arrow-2');
+  const crumbPlaceLabel = document.getElementById('crumb-place-label');
 
-  // Update View
+  if (crumbArrow1) crumbArrow1.style.display = 'inline';
+  if (crumbCityBtn) crumbCityBtn.style.display = 'inline-flex';
+  if (crumbCountryName) {
+    crumbCountryName.textContent = `${country.flag} ${country.name}`;
+  } else if (crumbCityBtn) {
+    crumbCityBtn.textContent = `${country.flag} ${country.name}`;
+  }
+  if (crumbArrow2) crumbArrow2.style.display = 'none';
+  if (crumbPlaceLabel) crumbPlaceLabel.style.display = 'none';
+
+  // Update Step 2 Header
+  const flagEl = document.getElementById('city-view-country-flag') || document.getElementById('selected-country-flag');
+  if (flagEl) flagEl.textContent = country.flag;
+
+  const titleEl = document.getElementById('city-view-country-name') || document.getElementById('selected-country-title');
+  if (titleEl) titleEl.textContent = country.name;
+
+  const taglineEl = document.getElementById('city-view-country-tagline') || document.getElementById('selected-country-subtitle');
+  if (taglineEl) taglineEl.textContent = country.tagline || `Select a city to start customizing your travel plan with Ocean Travel Agency.`;
+
+  // Render Cities
+  const citiesGrid = document.getElementById('city-cards-grid');
+  if (citiesGrid) {
+    citiesGrid.innerHTML = country.cities.map(cityKey => {
+      const city = travelData.cities[cityKey];
+      if (!city) return '';
+      return `
+        <div onclick="window.OceanApp.selectCity('${city.id}')" 
+             class="group bg-white rounded-3xl overflow-hidden border border-slate-200 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-300 cursor-pointer flex flex-col h-full transform hover:-translate-y-1">
+          <div class="relative h-48 w-full overflow-hidden bg-slate-100">
+            <img src="${city.heroImage}" alt="${city.name}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
+            <div class="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-900/10 to-transparent"></div>
+            
+            <div class="absolute top-4 right-4">
+              <span class="px-3 py-1 bg-slate-900/80 backdrop-blur-md rounded-full text-[11px] font-bold text-white shadow-sm flex items-center gap-1.5 border border-white/10">
+                <i class="fa-solid fa-location-dot text-[#a80c10]"></i> ${city.places.length} Attractions
+              </span>
+            </div>
+
+            <div class="absolute bottom-4 left-4 right-4 text-white">
+              <h3 class="text-xl font-black">${city.name}</h3>
+              <p class="text-xs text-slate-200 mt-0.5">${city.tagline}</p>
+            </div>
+          </div>
+
+          <div class="p-5 flex-1 flex flex-col justify-between space-y-4">
+            <p class="myanmar-text text-xs text-slate-600 leading-relaxed">${city.myanmarDesc || city.tagline}</p>
+            
+            <div class="flex items-center justify-between pt-3 border-t border-slate-100">
+              <span class="text-xs font-bold text-[#a80c10] flex items-center gap-1 group-hover:text-[#8e0a0d] transition-colors">
+                Choose Attractions <i class="fa-solid fa-chevron-right text-[10px] group-hover:translate-x-1 transition-transform"></i>
+              </span>
+              <span class="text-[11px] font-semibold text-slate-500">${city.suggestedDays || '2-3'} Days</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  // Switch View
   const viewCountry = document.getElementById('view-country');
   const viewCity = document.getElementById('view-city');
   const viewPlaces = document.getElementById('view-places');
 
-  viewCountry.style.display = 'none';
-  viewCity.style.display = 'block';
-  viewCity.classList.remove('view-animate');
-  void viewCity.offsetWidth; // Trigger reflow for animation
-  viewCity.classList.add('view-animate');
-  viewPlaces.style.display = 'none';
+  if (viewCountry) viewCountry.style.display = 'none';
+  if (viewCity) {
+    viewCity.style.display = 'block';
+    viewCity.classList.remove('view-animate');
+    void viewCity.offsetWidth;
+    viewCity.classList.add('view-animate');
+  }
+  if (viewPlaces) viewPlaces.style.display = 'none';
 
-  // Set City View Labels
-  document.getElementById('city-view-country-flag').textContent = country.flag;
-  document.getElementById('city-view-country-name').textContent = country.name;
-  document.getElementById('city-view-country-tagline').textContent = country.tagline;
-
-  renderCities(country.cities);
   window.scrollTo({ top: 0, behavior: 'smooth' });
-}
-
-/**
- * Render Step 2: Cities
- */
-export function renderCities(cityIds) {
-  const grid = document.getElementById('city-cards-grid');
-  if (!grid) return;
-  grid.innerHTML = cityIds.map(cityId => {
-    const city = travelData.cities[cityId];
-    if (!city) return '';
-    
-    const selectedInCity = state.selectedPlaces.filter(p => p.cityId === cityId).length;
-
-    return `
-      <div onclick="window.OceanApp.selectCity('${city.id}')"
-           class="group relative bg-white rounded-3xl overflow-hidden border border-slate-200 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-300 cursor-pointer flex flex-col h-full transform hover:-translate-y-1">
-        
-        <div class="relative h-60 w-full overflow-hidden bg-slate-100">
-          <img src="${city.heroImage}" alt="${city.name}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
-          <div class="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-900/20 to-transparent"></div>
-          
-          ${selectedInCity > 0 ? `
-            <div class="absolute top-4 right-4">
-              <span class="px-3 py-1 bg-[#a80c10] text-white rounded-full text-xs font-bold shadow-sm flex items-center gap-1">
-                <i class="fa-solid fa-check"></i> ${selectedInCity} in Plan
-              </span>
-            </div>
-          ` : ''}
-
-          <div class="absolute bottom-4 left-4 right-4 text-white">
-            <div class="text-[10px] font-bold text-[#a80c10] bg-white/95 backdrop-blur-sm px-2 py-0.5 rounded-full uppercase tracking-wider inline-block mb-1">
-              Featured Destination
-            </div>
-            <h3 class="text-2xl font-black tracking-tight">${city.name}</h3>
-            <p class="text-xs text-slate-200 mt-0.5">${city.places ? city.places.length : 0} Places & Activities</p>
-          </div>
-        </div>
-
-        <div class="p-6 flex-1 flex flex-col justify-between space-y-4">
-          <p class="text-xs sm:text-sm text-slate-500 leading-relaxed">${city.tagline}</p>
-          
-          <div class="pt-3 border-t border-slate-100 flex items-center justify-between">
-            <span class="text-xs font-bold text-[#a80c10] flex items-center gap-1.5 group-hover:text-[#8e0a0d] transition-colors">
-              Plan ${city.name} Trip <i class="fa-solid fa-arrow-right text-[10px] group-hover:translate-x-1 transition-transform"></i>
-            </span>
-            <span class="text-xs text-slate-400 font-medium">
-              <i class="fa-solid fa-camera mr-1"></i> Top Rated
-            </span>
-          </div>
-        </div>
-      </div>
-    `;
-  }).join('');
 }
 
 /**
@@ -339,41 +508,43 @@ export function selectCity(cityId) {
   const city = travelData.cities[cityId];
   if (!city) return;
 
-  const country = travelData.countries.find(c => c.id === city.countryId);
+  const country = travelData.countries.find(c => c.id === (state.currentCountryId || city.countryId));
 
   // Update Breadcrumbs
-  document.getElementById('crumb-arrow-1').style.display = 'inline-block';
-  document.getElementById('crumb-city-btn').style.display = 'inline-flex';
-  document.getElementById('crumb-country-name').textContent = country ? country.name : 'Country';
-  document.getElementById('crumb-arrow-2').style.display = 'inline-block';
-  document.getElementById('crumb-place-label').style.display = 'inline-flex';
-  document.getElementById('crumb-city-name').textContent = city.name;
+  const crumbArrow2 = document.getElementById('crumb-arrow-2');
+  const crumbPlaceLabel = document.getElementById('crumb-place-label');
+  const crumbCityName = document.getElementById('crumb-city-name');
+  if (crumbArrow2) crumbArrow2.style.display = 'inline';
+  if (crumbPlaceLabel) crumbPlaceLabel.style.display = 'inline';
+  if (crumbCityName) {
+    crumbCityName.textContent = city.name;
+  } else if (crumbPlaceLabel) {
+    crumbPlaceLabel.textContent = city.name;
+  }
 
-  // Update View
-  const viewCountry = document.getElementById('view-country');
-  const viewCity = document.getElementById('view-city');
-  const viewPlaces = document.getElementById('view-places');
+  // Header Details
+  const badgeEl = document.getElementById('places-city-badge');
+  if (badgeEl) badgeEl.textContent = `${country ? country.name : ''} • ${city.suggestedDays || '2-3'} Days`;
 
-  viewCountry.style.display = 'none';
-  viewCity.style.display = 'none';
-  viewPlaces.style.display = 'block';
-  viewPlaces.classList.remove('view-animate');
-  void viewPlaces.offsetWidth; // Trigger reflow
-  viewPlaces.classList.add('view-animate');
+  const titleEl = document.getElementById('places-city-title');
+  if (titleEl) titleEl.textContent = `${city.name} Custom Tour Itinerary`;
 
-  // Banner elements
-  document.getElementById('places-city-hero-img').src = city.heroImage;
-  document.getElementById('places-city-title').textContent = `Explore ${city.name}`;
-  document.getElementById('places-city-tagline').textContent = city.tagline;
-  document.getElementById('places-city-badge').textContent = country ? country.name : 'Destination';
+  const taglineEl = document.getElementById('places-city-tagline') || document.getElementById('places-city-subtitle');
+  if (taglineEl) taglineEl.textContent = `Explore the top sights of ${city.name}. Click or tap any photo to view in high-resolution, customize your schedule, and generate an official PDF travel plan.`;
 
+  const heroImg = document.getElementById('places-city-hero-img');
+  if (heroImg && city.heroImage) {
+    heroImg.src = city.heroImage;
+  }
+
+  // Reset Filters
   state.currentCategoryFilter = 'all';
   state.searchQuery = '';
   state.activeAccordionPlaceId = null;
+
   const searchInput = document.getElementById('place-search-input');
   if (searchInput) searchInput.value = '';
-  
-  // Filter tabs active state reset
+
   document.querySelectorAll('#category-filter-tabs .filter-tab').forEach((tab, index) => {
     if (index === 0) {
       tab.className = "filter-tab active px-4 py-2 rounded-full text-xs font-bold transition-all whitespace-nowrap bg-[#a80c10] text-white shadow-sm";
@@ -383,60 +554,76 @@ export function selectCity(cityId) {
   });
 
   renderPlacesList();
+
+  // Switch View
+  const viewCountry = document.getElementById('view-country');
+  const viewCity = document.getElementById('view-city');
+  const viewPlaces = document.getElementById('view-places');
+
+  if (viewCountry) viewCountry.style.display = 'none';
+  if (viewCity) viewCity.style.display = 'none';
+  if (viewPlaces) {
+    viewPlaces.style.display = 'block';
+    viewPlaces.classList.remove('view-animate');
+    void viewPlaces.offsetWidth;
+    viewPlaces.classList.add('view-animate');
+  }
+
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 /**
- * Render Step 3: Places List
+ * Render Places / Attractions List with Interactive 3-5 Photo Gallery
  */
 export function renderPlacesList() {
-  const city = travelData.cities[state.currentCityId];
-  if (!city) return;
-
-  const container = document.getElementById('places-cards-list');
+  const container = document.getElementById('places-cards-list') || document.getElementById('places-list-container');
   if (!container) return;
-  
-  let places = city.places ? [...city.places] : [];
 
-  // Sort
-  places.sort((a, b) => {
-    if (a.isMustVisit && !b.isMustVisit) return -1;
-    if (!a.isMustVisit && b.isMustVisit) return 1;
-    return (b.popularity || 0) - (a.popularity || 0);
-  });
+  const city = travelData.cities[state.currentCityId];
+  if (!city || !city.places) {
+    container.innerHTML = `<div class="p-8 text-center text-slate-400">No destinations found for this city.</div>`;
+    return;
+  }
 
-  // Filter by category
+  let places = [...city.places];
+
+  // Apply Category Filter
   if (state.currentCategoryFilter !== 'all') {
     if (state.currentCategoryFilter === 'must_visit') {
-      places = places.filter(p => p.isMustVisit);
+      places = places.filter(p => p.isMustVisit || p.category === 'must_visit');
     } else {
       places = places.filter(p => p.category === state.currentCategoryFilter);
     }
   }
 
-  // Filter by search
+  // Apply Search Filter
   if (state.searchQuery.trim()) {
     const q = state.searchQuery.toLowerCase();
     places = places.filter(p => 
-      (p.name && p.name.toLowerCase().includes(q)) || 
-      (p.myanmarDesc && p.myanmarDesc.includes(q)) || 
+      p.name.toLowerCase().includes(q) || 
+      (p.myanmarDesc && p.myanmarDesc.toLowerCase().includes(q)) ||
       (p.location && p.location.toLowerCase().includes(q))
     );
   }
 
-  // Update counts
-  const availCount = document.getElementById('places-available-count');
-  if (availCount) availCount.textContent = city.places ? city.places.length : 0;
-  
-  const selectedInThisCity = state.selectedPlaces.filter(p => p.cityId === city.id).length;
-  const selCityCount = document.getElementById('places-selected-city-count');
-  if (selCityCount) selCityCount.textContent = selectedInThisCity;
+  const countBadge = document.getElementById('places-available-count') || document.getElementById('places-count-badge');
+  if (countBadge) {
+    countBadge.textContent = `${places.length}`;
+  }
+
+  const selectedCountEl = document.getElementById('places-selected-city-count');
+  if (selectedCountEl) {
+    const selectedInCity = state.selectedPlaces.filter(p => p.cityId === state.currentCityId || p.cityName === city.name).length;
+    selectedCountEl.textContent = `${selectedInCity}`;
+  }
 
   if (places.length === 0) {
     container.innerHTML = `
-      <div class="text-center py-12 bg-white rounded-3xl border border-slate-200 p-8">
-        <i class="fa-solid fa-magnifying-glass text-3xl text-slate-300 mb-3"></i>
-        <h4 class="text-base font-bold text-slate-800">No attractions found</h4>
+      <div class="bg-white rounded-3xl p-12 text-center border border-slate-200 shadow-sm space-y-3">
+        <div class="w-16 h-16 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto text-2xl">
+          <i class="fa-solid fa-magnifying-glass"></i>
+        </div>
+        <h4 class="font-bold text-slate-800 text-base">No Matching Attractions Found</h4>
         <p class="text-xs text-slate-500 mt-1">Try clearing your search query or switching category filters.</p>
         <button onclick="window.OceanApp.filterPlaces('all')" class="mt-4 px-5 py-2 bg-[#a80c10] hover:bg-[#8e0a0d] text-white text-xs font-semibold rounded-full shadow-sm">Show All Places</button>
       </div>
@@ -447,6 +634,9 @@ export function renderPlacesList() {
   container.innerHTML = places.map((place, idx) => {
     const isSelected = state.selectedPlaces.some(p => p.id === place.id);
     const isExpanded = state.activeAccordionPlaceId === place.id;
+    const placeImages = (place.images && place.images.length > 0) 
+      ? place.images 
+      : [place.imageUrl || 'https://images.unsplash.com/photo-1528127269322-539801943592?auto=format&fit=crop&w=800&q=80'];
 
     return `
       <div id="place-card-${place.id}" class="bg-white rounded-2xl border ${isSelected ? 'border-[#a80c10] ring-2 ring-red-500/20 shadow-md' : 'border-slate-200 shadow-sm hover:border-slate-300'} transition-all duration-300 overflow-hidden">
@@ -457,14 +647,31 @@ export function renderPlacesList() {
           <!-- Left: Thumbnail & Main Info -->
           <div class="flex items-start gap-4 flex-1 cursor-pointer" onclick="window.OceanApp.togglePlaceAccordion('${place.id}')">
             
-            <div class="relative w-24 h-24 sm:w-28 sm:h-28 rounded-2xl overflow-hidden flex-shrink-0 bg-slate-100 shadow-inner">
-              <img src="${place.imageUrl}" alt="${place.name}" class="w-full h-full object-cover" loading="lazy" />
+            <!-- Clickable Main Hero Thumbnail with Lightbox Trigger -->
+            <div class="group relative w-24 h-24 sm:w-28 sm:h-28 rounded-2xl overflow-hidden flex-shrink-0 bg-slate-100 shadow-inner" 
+                 onclick="event.stopPropagation(); window.OceanApp.openImageLightbox('${place.id}', 0);" 
+                 title="Click or tap to view photos in large size">
+              <img src="${placeImages[0]}" alt="${place.name}" class="w-full h-full object-cover group-hover:scale-108 transition-transform duration-500" loading="lazy" />
+              
+              <!-- Hover Zoom Overlay Icon -->
+              <div class="absolute inset-0 bg-black/0 group-hover:bg-black/35 transition-colors flex items-center justify-center">
+                <span class="opacity-0 group-hover:opacity-100 bg-white/90 text-slate-900 text-xs w-8 h-8 rounded-full flex items-center justify-center shadow-lg transition-opacity duration-200">
+                  <i class="fa-solid fa-magnifying-glass-plus text-[#a80c10]"></i>
+                </span>
+              </div>
+
               ${place.isMustVisit ? `
                 <span class="absolute top-1.5 left-1.5 bg-[#a80c10] text-white text-[9px] font-bold px-2 py-0.5 rounded-full shadow-sm uppercase tracking-wider">
                   Top Pick
                 </span>
               ` : ''}
-              <span class="absolute bottom-1 right-1 bg-black/70 text-white text-[9px] font-bold px-1.5 py-0.5 rounded backdrop-blur-xs">
+
+              <!-- Photo Count Badge -->
+              <span class="absolute bottom-1.5 left-1.5 bg-black/75 hover:bg-black/90 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-md backdrop-blur-xs flex items-center gap-1">
+                <i class="fa-solid fa-camera text-amber-400 text-[8px]"></i> ${placeImages.length}
+              </span>
+
+              <span class="absolute bottom-1.5 right-1.5 bg-black/75 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-md backdrop-blur-xs">
                 #${idx + 1}
               </span>
             </div>
@@ -498,7 +705,7 @@ export function renderPlacesList() {
 
               <!-- Single clean Details button -->
               <div class="text-[11px] font-bold text-[#a80c10] hover:text-[#8e0a0d] inline-flex items-center gap-1.5 pt-1 cursor-pointer" onclick="event.stopPropagation(); window.OceanApp.togglePlaceAccordion('${place.id}')">
-                <span>${isExpanded ? 'Hide Details' : 'Details'}</span>
+                <span>${isExpanded ? 'Hide Details' : 'Details & Photos'}</span>
                 <i class="fa-solid ${isExpanded ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px] transition-transform"></i>
               </div>
             </div>
@@ -508,6 +715,9 @@ export function renderPlacesList() {
           <!-- Right: Actions (Add to Plan + Admin controls) -->
           <div class="flex items-center gap-2 w-full md:w-auto justify-end pt-2 md:pt-0 border-t md:border-t-0 border-slate-100 flex-shrink-0 relative z-10">
             ${state.isAdmin ? `
+              <button onclick="event.stopPropagation(); window.OceanApp.openEditPlaceModal('${place.id}', 'photos')" title="Manage Place Photos (${placeImages.length} Images)" class="px-2.5 py-1.5 rounded-full border border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100 transition-colors text-xs font-semibold flex items-center gap-1.5">
+                <i class="fa-solid fa-camera text-amber-600"></i> Photos (${placeImages.length})
+              </button>
               <button onclick="event.stopPropagation(); window.OceanApp.openEditPlaceModal('${place.id}')" title="Edit Place" class="p-2 rounded-full border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-sky-600 transition-colors text-xs">
                 <i class="fa-solid fa-pen-to-square"></i>
               </button>
@@ -530,7 +740,48 @@ export function renderPlacesList() {
 
         </div>
 
-        <!-- Accordion Expansion: Detailed Overview & Highlights -->
+        <!-- Inline Interactive Photo Gallery Strip (Click or touch any photo to enlarge) -->
+        <div class="px-4 sm:px-5 pb-3">
+          <div class="pt-2 border-t border-slate-100">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                <i class="fa-solid fa-images text-[#a80c10]"></i> ဓာတ်ပုံများ (Tap photo to view large)
+              </span>
+              <div class="flex items-center gap-2">
+                ${state.isAdmin ? `
+                  <button type="button" onclick="event.stopPropagation(); window.OceanApp.openEditPlaceModal('${place.id}', 'photos');" class="text-[11px] font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-md flex items-center gap-1 cursor-pointer transition-colors">
+                    <i class="fa-solid fa-pen-to-square text-amber-600"></i> Edit Photo URLs
+                  </button>
+                ` : ''}
+                <button type="button" onclick="event.stopPropagation(); window.OceanApp.openImageLightbox('${place.id}', 0);" class="text-[11px] font-bold text-[#a80c10] hover:text-[#8e0a0d] flex items-center gap-1 cursor-pointer">
+                  View All ${placeImages.length} Photos <i class="fa-solid fa-arrow-up-right-from-square text-[9px]"></i>
+                </button>
+              </div>
+            </div>
+
+            <!-- Photos Grid (Responsive 3-5 images) -->
+            <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
+              ${placeImages.map((imgUrl, imgIdx) => `
+                <div onclick="event.stopPropagation(); window.OceanApp.openImageLightbox('${place.id}', ${imgIdx});" 
+                     class="group/item relative aspect-4/3 rounded-xl overflow-hidden bg-slate-100 border border-slate-200 hover:border-[#a80c10] transition-all duration-200 cursor-pointer shadow-xs hover:shadow-md">
+                  <img src="${imgUrl}" alt="${place.name} - Photo ${imgIdx + 1}" class="w-full h-full object-cover group-hover/item:scale-110 transition-transform duration-500" loading="lazy" />
+                  
+                  <div class="absolute inset-0 bg-black/0 group-hover/item:bg-black/30 transition-colors flex items-center justify-center">
+                    <span class="opacity-0 group-hover/item:opacity-100 bg-black/75 text-white text-[10px] font-bold px-2 py-0.5 rounded-full backdrop-blur-xs transition-opacity flex items-center gap-1">
+                      <i class="fa-solid fa-magnifying-glass-plus text-amber-300 text-[9px]"></i> View
+                    </span>
+                  </div>
+
+                  <span class="absolute bottom-1 right-1 bg-black/70 text-white text-[8px] font-mono font-bold px-1.5 py-0.2 rounded backdrop-blur-xs">
+                    ${imgIdx + 1}/${placeImages.length}
+                  </span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+
+        <!-- Accordion Expansion: Detailed Overview, Key Highlights & Full Gallery -->
         <div class="accordion-content border-t border-slate-100 bg-slate-50/60 overflow-hidden ${isExpanded ? 'block' : 'hidden'}">
           <div class="p-5 sm:p-6 space-y-4">
             
@@ -546,6 +797,38 @@ export function renderPlacesList() {
               <p class="myanmar-text text-sm text-slate-700 leading-relaxed font-normal">
                 ${place.myanmarDesc || 'အသေးစိတ် အချက်အလက်များ မကြာမီ ဖော်ပြပေးပါမည်။'}
               </p>
+            </div>
+
+            <!-- Full Sized Photos Gallery inside Accordion -->
+            <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
+              <div class="flex items-center justify-between">
+                <div class="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                  <i class="fa-solid fa-camera-retro text-[#a80c10]"></i>
+                  ဓာတ်ပုံမှတ်တမ်းများ (High-Resolution Gallery)
+                </div>
+                <div class="flex items-center gap-2">
+                  ${state.isAdmin ? `
+                    <button type="button" onclick="event.stopPropagation(); window.OceanApp.openEditPlaceModal('${place.id}', 'photos');" class="text-[11px] font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-md flex items-center gap-1 cursor-pointer transition-colors">
+                      <i class="fa-solid fa-pen-to-square text-amber-600"></i> Edit Gallery URLs
+                    </button>
+                  ` : ''}
+                  <span class="text-[11px] text-slate-500 font-semibold">${placeImages.length} Curated High-Res Photos</span>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                ${placeImages.map((imgUrl, imgIdx) => `
+                  <div onclick="event.stopPropagation(); window.OceanApp.openImageLightbox('${place.id}', ${imgIdx});" 
+                       class="group/gallery relative aspect-16/10 rounded-xl overflow-hidden cursor-pointer bg-slate-100 border border-slate-200 hover:border-[#a80c10] shadow-xs hover:shadow-md transition-all">
+                    <img src="${imgUrl}" alt="${place.name} - Gallery ${imgIdx + 1}" class="w-full h-full object-cover group-hover/gallery:scale-108 transition-transform duration-500" loading="lazy" />
+                    <div class="absolute inset-0 bg-black/0 group-hover/gallery:bg-black/35 transition-colors flex items-center justify-center">
+                      <div class="opacity-0 group-hover/gallery:opacity-100 bg-black/75 text-white text-xs font-bold px-2.5 py-1 rounded-full backdrop-blur-xs flex items-center gap-1.5 transition-opacity">
+                        <i class="fa-solid fa-expand text-amber-300"></i> View Large
+                      </div>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
             </div>
 
             ${place.myanmarHighlights && place.myanmarHighlights.length > 0 ? `
@@ -588,6 +871,193 @@ export function togglePlaceAccordion(placeId) {
     state.activeAccordionPlaceId = placeId;
   }
   renderPlacesList();
+}
+
+/**
+ * HIGH-RESOLUTION IMAGE LIGHTBOX CONTROLLER
+ */
+export function openImageLightbox(placeId, imageIndex = 0) {
+  let foundPlace = null;
+  for (const cityId in travelData.cities) {
+    const city = travelData.cities[cityId];
+    if (city && city.places) {
+      const p = city.places.find(item => item.id === placeId);
+      if (p) {
+        foundPlace = p;
+        break;
+      }
+    }
+  }
+
+  if (!foundPlace) return;
+
+  const images = (foundPlace.images && foundPlace.images.length > 0) 
+    ? foundPlace.images 
+    : [foundPlace.imageUrl || 'https://images.unsplash.com/photo-1528127269322-539801943592?auto=format&fit=crop&w=1200&q=80'];
+
+  const safeIndex = Math.max(0, Math.min(imageIndex, images.length - 1));
+
+  state.lightbox = {
+    isOpen: true,
+    placeId: foundPlace.id,
+    currentImageIndex: safeIndex,
+    images: images,
+    placeTitle: foundPlace.name,
+    categoryLabel: foundPlace.categoryLabel || 'Attraction',
+    caption: foundPlace.myanmarDesc || ''
+  };
+
+  updateLightboxDisplay();
+
+  const modal = document.getElementById('image-lightbox-modal');
+  if (modal) {
+    modal.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+  }
+}
+
+export function closeImageLightbox() {
+  state.lightbox.isOpen = false;
+  const modal = document.getElementById('image-lightbox-modal');
+  if (modal) {
+    modal.classList.add('hidden');
+    document.body.style.overflow = '';
+  }
+  if (document.fullscreenElement) {
+    try {
+      document.exitFullscreen();
+    } catch(e) {}
+  }
+}
+
+export function prevLightboxImage(e) {
+  if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+  if (!state.lightbox.images || state.lightbox.images.length === 0) return;
+  state.lightbox.currentImageIndex = (state.lightbox.currentImageIndex - 1 + state.lightbox.images.length) % state.lightbox.images.length;
+  updateLightboxDisplay();
+}
+
+export function nextLightboxImage(e) {
+  if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+  if (!state.lightbox.images || state.lightbox.images.length === 0) return;
+  state.lightbox.currentImageIndex = (state.lightbox.currentImageIndex + 1) % state.lightbox.images.length;
+  updateLightboxDisplay();
+}
+
+export function setLightboxImageIndex(index) {
+  if (index < 0 || index >= state.lightbox.images.length) return;
+  state.lightbox.currentImageIndex = index;
+  updateLightboxDisplay();
+}
+
+export function toggleLightboxFullscreen() {
+  const modal = document.getElementById('image-lightbox-modal');
+  if (!modal) return;
+  const icon = document.getElementById('lightbox-fullscreen-icon');
+  if (!document.fullscreenElement) {
+    modal.requestFullscreen().then(() => {
+      if (icon) {
+        icon.classList.remove('fa-expand');
+        icon.classList.add('fa-compress');
+      }
+    }).catch(err => {
+      console.warn('Fullscreen request failed:', err);
+    });
+  } else {
+    document.exitFullscreen().then(() => {
+      if (icon) {
+        icon.classList.remove('fa-compress');
+        icon.classList.add('fa-expand');
+      }
+    }).catch(err => {});
+  }
+}
+
+export function updateLightboxDisplay() {
+  const { placeTitle, categoryLabel, caption, images, currentImageIndex } = state.lightbox;
+  if (!images || images.length === 0) return;
+
+  const currentUrl = images[currentImageIndex];
+
+  const titleEl = document.getElementById('lightbox-place-title');
+  const catEl = document.getElementById('lightbox-category-badge');
+  const counterEl = document.getElementById('lightbox-counter');
+  const captionEl = document.getElementById('lightbox-caption');
+  const mainImg = document.getElementById('lightbox-main-image');
+  const spinner = document.getElementById('lightbox-loading-spinner');
+  const thumbsContainer = document.getElementById('lightbox-thumbnails-container');
+
+  if (titleEl) titleEl.textContent = placeTitle;
+  if (catEl) catEl.textContent = categoryLabel;
+  if (counterEl) counterEl.textContent = `${currentImageIndex + 1} / ${images.length}`;
+  if (captionEl) captionEl.textContent = caption || 'Ocean Travel curated destination photography.';
+
+  if (mainImg) {
+    if (spinner) spinner.classList.remove('hidden');
+    mainImg.src = currentUrl;
+    mainImg.onload = () => {
+      if (spinner) spinner.classList.add('hidden');
+    };
+    mainImg.onerror = () => {
+      if (spinner) spinner.classList.add('hidden');
+    };
+  }
+
+  if (thumbsContainer) {
+    thumbsContainer.innerHTML = images.map((url, idx) => {
+      const isActive = idx === currentImageIndex;
+      return `
+        <button type="button" onclick="window.OceanApp.setLightboxImageIndex(${idx})" class="relative w-14 h-11 sm:w-16 sm:h-12 rounded-xl overflow-hidden flex-shrink-0 transition-all cursor-pointer ${
+          isActive 
+            ? 'ring-2 ring-[#a80c10] ring-offset-2 ring-offset-black scale-105 opacity-100' 
+            : 'opacity-50 hover:opacity-90 border border-white/20'
+        }">
+          <img src="${url}" alt="Thumbnail ${idx + 1}" class="w-full h-full object-cover" />
+          <span class="absolute bottom-0.5 right-0.5 bg-black/70 text-white text-[8px] font-bold px-1 rounded">
+            #${idx + 1}
+          </span>
+        </button>
+      `;
+    }).join('');
+  }
+}
+
+/**
+ * Setup Lightbox keyboard and touch gestures
+ */
+let touchStartX = 0;
+let touchEndX = 0;
+
+function setupLightboxEvents() {
+  const stageArea = document.getElementById('lightbox-stage-area');
+  if (stageArea) {
+    stageArea.addEventListener('touchstart', (e) => {
+      touchStartX = e.changedTouches[0].screenX;
+    }, { passive: true });
+
+    stageArea.addEventListener('touchend', (e) => {
+      touchEndX = e.changedTouches[0].screenX;
+      const diff = touchEndX - touchStartX;
+      if (Math.abs(diff) > 40) {
+        if (diff > 0) {
+          prevLightboxImage();
+        } else {
+          nextLightboxImage();
+        }
+      }
+    }, { passive: true });
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (!state.lightbox.isOpen) return;
+    if (e.key === 'Escape') {
+      closeImageLightbox();
+    } else if (e.key === 'ArrowLeft') {
+      prevLightboxImage();
+    } else if (e.key === 'ArrowRight') {
+      nextLightboxImage();
+    }
+  });
 }
 
 let toastTimeout = null;
@@ -699,9 +1169,7 @@ export function togglePlaceSelection(placeId, evt) {
           origin: { y: 0.8 },
           colors: ['#a80c10', '#0284c7', '#0f172a', '#f59e0b']
         });
-      } catch (err) {
-        // Safe confetti catch
-      }
+      } catch (err) {}
     }
   }
 
@@ -835,7 +1303,7 @@ export function renderDrawerPlacesList() {
         </div>
       </div>
 
-      <button onclick="window.OceanApp.removePlaceFromPlan('${place.id}')" class="text-slate-400 hover:text-rose-600 p-2 transition-colors flex-shrink-0" title="Remove place">
+      <button onclick="window.OceanApp.removePlaceFromPlan('${place.id}')" class="text-slate-400 hover:text-rose-600 p-2 transition-colors flex-shrink-0 cursor-pointer" title="Remove place">
         <i class="fa-solid fa-trash-can text-xs"></i>
       </button>
     </div>
@@ -878,21 +1346,28 @@ export function resetToCountrySelection() {
   state.currentCountryId = null;
   state.currentCityId = null;
 
-  document.getElementById('crumb-arrow-1').style.display = 'none';
-  document.getElementById('crumb-city-btn').style.display = 'none';
-  document.getElementById('crumb-arrow-2').style.display = 'none';
-  document.getElementById('crumb-place-label').style.display = 'none';
+  const crumbArrow1 = document.getElementById('crumb-arrow-1');
+  const crumbCityBtn = document.getElementById('crumb-city-btn');
+  const crumbArrow2 = document.getElementById('crumb-arrow-2');
+  const crumbPlaceLabel = document.getElementById('crumb-place-label');
+
+  if (crumbArrow1) crumbArrow1.style.display = 'none';
+  if (crumbCityBtn) crumbCityBtn.style.display = 'none';
+  if (crumbArrow2) crumbArrow2.style.display = 'none';
+  if (crumbPlaceLabel) crumbPlaceLabel.style.display = 'none';
 
   const viewCountry = document.getElementById('view-country');
   const viewCity = document.getElementById('view-city');
   const viewPlaces = document.getElementById('view-places');
 
-  viewCountry.style.display = 'block';
-  viewCountry.classList.remove('view-animate');
-  void viewCountry.offsetWidth;
-  viewCountry.classList.add('view-animate');
-  viewCity.style.display = 'none';
-  viewPlaces.style.display = 'none';
+  if (viewCountry) {
+    viewCountry.style.display = 'block';
+    viewCountry.classList.remove('view-animate');
+    void viewCountry.offsetWidth;
+    viewCountry.classList.add('view-animate');
+  }
+  if (viewCity) viewCity.style.display = 'none';
+  if (viewPlaces) viewPlaces.style.display = 'none';
 
   renderCountries();
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -911,58 +1386,399 @@ export function backToCitySelection() {
 }
 
 /**
+ * Sample Curated Travel Photos for fast preset addition
+ */
+const SAMPLE_TRAVEL_PHOTOS = [
+  'https://images.unsplash.com/photo-1559592413-7cec4d0cae2b?auto=format&fit=crop&w=1200&q=80',
+  'https://images.unsplash.com/photo-1569154941061-e231b4725ef1?auto=format&fit=crop&w=1200&q=80',
+  'https://images.unsplash.com/photo-1583417319070-4a69db38a482?auto=format&fit=crop&w=1200&q=80',
+  'https://images.unsplash.com/photo-1528127269322-539801943592?auto=format&fit=crop&w=1200&q=80',
+  'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=1200&q=80',
+  'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1200&q=80',
+  'https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?auto=format&fit=crop&w=1200&q=80',
+  'https://images.unsplash.com/photo-1518548419970-58e3b4079ab2?auto=format&fit=crop&w=1200&q=80'
+];
+
+/**
+ * Render Interactive Photo Gallery Cards in Place Modal
+ */
+export function renderModalImagesList() {
+  const container = document.getElementById('modal-images-cards-list');
+  const countBadge = document.getElementById('modal-images-count-badge');
+  const bulkInput = document.getElementById('edit-images-input');
+
+  if (!state.modalImages) state.modalImages = [];
+
+  // Update count badge
+  if (countBadge) {
+    countBadge.textContent = `${state.modalImages.length} Photo${state.modalImages.length === 1 ? '' : 's'}${state.modalImages.length > 0 ? ' (1st is Cover)' : ''}`;
+    countBadge.className = `text-[10px] px-2 py-0.5 rounded-full font-mono font-bold ${
+      state.modalImages.length === 0 ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-700'
+    }`;
+  }
+
+  // Sync with bulk textarea
+  if (bulkInput) {
+    bulkInput.value = state.modalImages.join('\n');
+  }
+
+  if (!container) return;
+
+  if (state.modalImages.length === 0) {
+    container.innerHTML = `
+      <div class="bg-amber-50 border border-amber-200/80 rounded-xl p-3.5 text-center text-xs text-amber-900 space-y-2">
+        <div class="font-bold flex items-center justify-center gap-1.5">
+          <i class="fa-solid fa-triangle-exclamation text-amber-500"></i> No photos in gallery
+        </div>
+        <p class="text-[11px] text-amber-800/80 leading-relaxed">
+          At least 1 photo URL is required for the destination cover. Paste a URL below or click insert sample photo.
+        </p>
+        <button type="button" onclick="window.OceanApp.addSampleModalImage()" class="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer">
+          + Insert Sample High-Res Photo
+        </button>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = state.modalImages.map((imgUrl, idx) => {
+    const isCover = idx === 0;
+    return `
+      <div id="modal-img-row-${idx}" class="group bg-white border ${isCover ? 'border-amber-300 ring-1 ring-amber-400/30' : 'border-slate-200'} rounded-xl p-2.5 flex items-center gap-3 shadow-xs hover:border-slate-300 transition-all">
+        
+        <!-- Live Thumbnail with fallback -->
+        <div class="relative w-16 h-12 rounded-lg overflow-hidden flex-shrink-0 bg-slate-100 border border-slate-200 shadow-inner group/thumb">
+          <img id="modal-thumb-img-${idx}" src="${imgUrl}" alt="Photo ${idx + 1}" class="w-full h-full object-cover" 
+               onerror="this.src='https://images.unsplash.com/photo-1528127269322-539801943592?auto=format&fit=crop&w=400&q=80'; this.title='Image URL may be broken';" />
+          <span class="absolute bottom-0.5 right-0.5 bg-black/75 text-white text-[8px] font-mono font-bold px-1 rounded">
+            #${idx + 1}
+          </span>
+          ${isCover ? `
+            <span class="absolute top-0.5 left-0.5 bg-amber-500 text-white text-[7px] font-bold px-1 rounded shadow-xs">
+              COVER
+            </span>
+          ` : ''}
+        </div>
+
+        <!-- URL Input & Position Badge -->
+        <div class="flex-1 min-w-0 space-y-1">
+          <div class="flex items-center justify-between gap-1">
+            <div class="flex items-center gap-1.5">
+              <span class="text-[10px] font-bold ${isCover ? 'text-amber-800 bg-amber-100/80 px-1.5 py-0.2 rounded' : 'text-slate-500'}">
+                ${isCover ? '★ Primary Cover Photo' : `Gallery Photo #${idx + 1}`}
+              </span>
+            </div>
+            ${!isCover ? `
+              <button type="button" onclick="window.OceanApp.makeCoverModalImage(${idx})" title="Set as primary cover photo" class="text-[10px] font-bold text-amber-700 hover:text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-200/80 px-2 py-0.5 rounded transition-colors cursor-pointer">
+                ★ Make Cover
+              </button>
+            ` : ''}
+          </div>
+
+          <div class="relative">
+            <input type="url" value="${imgUrl}" placeholder="https://..." 
+                   oninput="window.OceanApp.updateModalImageUrl(${idx}, this.value)" 
+                   class="w-full px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-mono text-slate-800 focus:bg-white focus:border-[#a80c10] focus:ring-1 focus:ring-[#a80c10] outline-none transition-all" />
+          </div>
+        </div>
+
+        <!-- Action Buttons: Move Up, Move Down, Delete -->
+        <div class="flex items-center gap-1 flex-shrink-0">
+          <button type="button" onclick="window.OceanApp.moveModalImage(${idx}, -1)" ${idx === 0 ? 'disabled' : ''} 
+                  class="w-7 h-7 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-25 disabled:pointer-events-none text-slate-600 flex items-center justify-center text-xs transition-colors cursor-pointer" 
+                  title="Move Photo Up">
+            <i class="fa-solid fa-arrow-up"></i>
+          </button>
+          
+          <button type="button" onclick="window.OceanApp.moveModalImage(${idx}, 1)" ${idx === state.modalImages.length - 1 ? 'disabled' : ''} 
+                  class="w-7 h-7 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-25 disabled:pointer-events-none text-slate-600 flex items-center justify-center text-xs transition-colors cursor-pointer" 
+                  title="Move Photo Down">
+            <i class="fa-solid fa-arrow-down"></i>
+          </button>
+
+          <button type="button" onclick="window.OceanApp.deleteModalImage(${idx})" 
+                  class="w-7 h-7 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-[#a80c10] flex items-center justify-center text-xs transition-colors cursor-pointer" 
+                  title="Delete Photo">
+            <i class="fa-regular fa-trash-can"></i>
+          </button>
+        </div>
+
+      </div>
+    `;
+  }).join('');
+}
+
+/**
+ * Update Individual Image URL
+ */
+export function updateModalImageUrl(index, newUrl) {
+  if (!state.modalImages || index < 0 || index >= state.modalImages.length) return;
+  state.modalImages[index] = newUrl.trim();
+  
+  // Live update the thumbnail img tag
+  const thumbImg = document.getElementById(`modal-thumb-img-${index}`);
+  if (thumbImg && newUrl.trim()) {
+    thumbImg.src = newUrl.trim();
+  }
+
+  // Update bulk text
+  const bulkInput = document.getElementById('edit-images-input');
+  if (bulkInput) {
+    bulkInput.value = state.modalImages.join('\n');
+  }
+}
+
+/**
+ * Add New Image URL
+ */
+export function addModalImage(customUrl) {
+  const input = document.getElementById('new-image-url-input');
+  const urlToAdd = customUrl || (input ? input.value.trim() : '');
+
+  if (!urlToAdd) {
+    if (input) input.focus();
+    return;
+  }
+
+  if (!state.modalImages) state.modalImages = [];
+  state.modalImages.push(urlToAdd);
+
+  if (input) input.value = '';
+  renderModalImagesList();
+}
+
+/**
+ * Delete Image at index
+ */
+export function deleteModalImage(index) {
+  if (!state.modalImages || index < 0 || index >= state.modalImages.length) return;
+  state.modalImages.splice(index, 1);
+  renderModalImagesList();
+}
+
+/**
+ * Make Image Cover (#1 Position)
+ */
+export function makeCoverModalImage(index) {
+  if (!state.modalImages || index <= 0 || index >= state.modalImages.length) return;
+  const [item] = state.modalImages.splice(index, 1);
+  state.modalImages.unshift(item);
+  renderModalImagesList();
+}
+
+/**
+ * Move Image Up or Down
+ */
+export function moveModalImage(index, direction) {
+  if (!state.modalImages) return;
+  const newIndex = index + direction;
+  if (newIndex < 0 || newIndex >= state.modalImages.length) return;
+
+  const temp = state.modalImages[index];
+  state.modalImages[index] = state.modalImages[newIndex];
+  state.modalImages[newIndex] = temp;
+  renderModalImagesList();
+}
+
+/**
+ * Add Sample High-Res Photo
+ */
+export function addSampleModalImage() {
+  if (!state.modalImages) state.modalImages = [];
+  const available = SAMPLE_TRAVEL_PHOTOS.find(url => !state.modalImages.includes(url)) || SAMPLE_TRAVEL_PHOTOS[Math.floor(Math.random() * SAMPLE_TRAVEL_PHOTOS.length)];
+  state.modalImages.push(available);
+  renderModalImagesList();
+}
+
+/**
+ * Switch Image Tab (Visual vs Bulk)
+ */
+export function switchModalImageTab(tabName) {
+  state.modalImageTab = tabName;
+  const visualContainer = document.getElementById('modal-images-visual-container');
+  const bulkContainer = document.getElementById('modal-images-bulk-container');
+  const visualBtn = document.getElementById('img-tab-visual-btn');
+  const bulkBtn = document.getElementById('img-tab-bulk-btn');
+
+  if (tabName === 'visual') {
+    if (visualContainer) visualContainer.classList.remove('hidden');
+    if (bulkContainer) bulkContainer.classList.add('hidden');
+    if (visualBtn) {
+      visualBtn.className = 'px-2.5 py-1 rounded-md bg-[#a80c10] text-white transition-colors';
+    }
+    if (bulkBtn) {
+      bulkBtn.className = 'px-2.5 py-1 rounded-md text-slate-600 hover:text-slate-900 transition-colors';
+    }
+    renderModalImagesList();
+  } else {
+    if (visualContainer) visualContainer.classList.add('hidden');
+    if (bulkContainer) bulkContainer.classList.remove('hidden');
+    if (visualBtn) {
+      visualBtn.className = 'px-2.5 py-1 rounded-md text-slate-600 hover:text-slate-900 transition-colors';
+    }
+    if (bulkBtn) {
+      bulkBtn.className = 'px-2.5 py-1 rounded-md bg-[#a80c10] text-white transition-colors';
+    }
+    const bulkInput = document.getElementById('edit-images-input');
+    if (bulkInput && state.modalImages) {
+      bulkInput.value = state.modalImages.join('\n');
+    }
+  }
+}
+
+/**
+ * Handle Bulk Multi-line Text Change
+ */
+export function handleModalImagesBulkChange(text) {
+  const urls = text.split('\n').map(s => s.trim()).filter(Boolean);
+  state.modalImages = urls;
+  const countBadge = document.getElementById('modal-images-count-badge');
+  if (countBadge) {
+    countBadge.textContent = `${state.modalImages.length} Photo${state.modalImages.length === 1 ? '' : 's'}`;
+  }
+}
+
+/**
  * Admin Place Management: Add / Edit / Delete
  */
 export function openAddPlaceModal() {
   state.editingPlaceId = null;
-  document.getElementById('place-modal-title').textContent = 'Add New Place / Attraction';
-  document.getElementById('edit-city-select').value = state.currentCityId || 'danang';
-  document.getElementById('edit-name-input').value = '';
-  document.getElementById('edit-category-select').value = 'must_visit';
-  document.getElementById('edit-duration-input').value = '2.5';
-  document.getElementById('edit-location-input').value = '';
-  document.getElementById('edit-image-input').value = 'https://images.unsplash.com/photo-1559592413-7cec4d0cae2b?auto=format&fit=crop&w=800&q=80';
-  document.getElementById('edit-myanmar-desc-input').value = '';
-  document.getElementById('edit-highlights-input').value = '';
-  document.getElementById('edit-mustvisit-check').checked = true;
-  document.getElementById('place-edit-modal').classList.remove('hidden');
+  const titleEl = document.getElementById('place-modal-title');
+  if (titleEl) titleEl.textContent = 'Add New Place / Attraction';
+
+  // Populate city select options dynamically
+  const citySelect = document.getElementById('edit-city-select');
+  if (citySelect && travelData.cities) {
+    citySelect.innerHTML = Object.values(travelData.cities).map(c => `
+      <option value="${c.id}">${c.name} (${c.countryId ? c.countryId.toUpperCase() : 'City'})</option>
+    `).join('');
+    citySelect.value = state.currentCityId || 'danang';
+  }
+
+  const nameInput = document.getElementById('edit-name-input');
+  if (nameInput) nameInput.value = '';
+
+  const catSelect = document.getElementById('edit-category-select');
+  if (catSelect) catSelect.value = 'must_visit';
+
+  const durInput = document.getElementById('edit-duration-input');
+  if (durInput) durInput.value = '2.5';
+
+  const locInput = document.getElementById('edit-location-input');
+  if (locInput) locInput.value = '';
+
+  state.modalImages = [
+    'https://images.unsplash.com/photo-1559592413-7cec4d0cae2b?auto=format&fit=crop&w=1200&q=80',
+    'https://images.unsplash.com/photo-1569154941061-e231b4725ef1?auto=format&fit=crop&w=1200&q=80',
+    'https://images.unsplash.com/photo-1583417319070-4a69db38a482?auto=format&fit=crop&w=1200&q=80'
+  ];
+  switchModalImageTab('visual');
+  renderModalImagesList();
+
+  const descInput = document.getElementById('edit-myanmar-desc-input');
+  if (descInput) descInput.value = '';
+
+  const highInput = document.getElementById('edit-highlights-input');
+  if (highInput) highInput.value = '';
+
+  const mustCheck = document.getElementById('edit-mustvisit-check');
+  if (mustCheck) mustCheck.checked = true;
+
+  const modal = document.getElementById('place-edit-modal');
+  if (modal) modal.classList.remove('hidden');
 }
 
-export function openEditPlaceModal(placeId) {
+export function openEditPlaceModal(placeId, targetTab = 'visual') {
   const city = travelData.cities[state.currentCityId];
   if (!city) return;
   const place = city.places.find(p => p.id === placeId);
   if (!place) return;
 
   state.editingPlaceId = placeId;
-  document.getElementById('place-modal-title').textContent = `Edit Place: ${place.name}`;
-  document.getElementById('edit-city-select').value = state.currentCityId;
-  document.getElementById('edit-name-input').value = place.name || '';
-  document.getElementById('edit-category-select').value = place.category || 'must_visit';
-  document.getElementById('edit-duration-input').value = place.durationHours || 2.0;
-  document.getElementById('edit-location-input').value = place.location || '';
-  document.getElementById('edit-image-input').value = place.imageUrl || '';
-  document.getElementById('edit-myanmar-desc-input').value = place.myanmarDesc || '';
-  document.getElementById('edit-highlights-input').value = place.myanmarHighlights ? place.myanmarHighlights.join('\n') : '';
-  document.getElementById('edit-mustvisit-check').checked = !!place.isMustVisit;
-  document.getElementById('place-edit-modal').classList.remove('hidden');
+  const titleEl = document.getElementById('place-modal-title');
+  if (titleEl) titleEl.textContent = `Edit Place: ${place.name}`;
+
+  // Populate city select options dynamically
+  const citySelect = document.getElementById('edit-city-select');
+  if (citySelect && travelData.cities) {
+    citySelect.innerHTML = Object.values(travelData.cities).map(c => `
+      <option value="${c.id}">${c.name} (${c.countryId ? c.countryId.toUpperCase() : 'City'})</option>
+    `).join('');
+    citySelect.value = state.currentCityId;
+  }
+
+  const nameInput = document.getElementById('edit-name-input');
+  if (nameInput) nameInput.value = place.name || '';
+
+  const catSelect = document.getElementById('edit-category-select');
+  if (catSelect) catSelect.value = place.category || 'must_visit';
+
+  const durInput = document.getElementById('edit-duration-input');
+  if (durInput) durInput.value = place.durationHours || 2.0;
+
+  const locInput = document.getElementById('edit-location-input');
+  if (locInput) locInput.value = place.location || '';
+  
+  const placeImages = (place.images && place.images.length > 0) 
+    ? [...place.images] 
+    : (place.imageUrl ? [place.imageUrl] : []);
+  
+  state.modalImages = placeImages.length > 0 ? placeImages : [
+    'https://images.unsplash.com/photo-1559592413-7cec4d0cae2b?auto=format&fit=crop&w=1200&q=80'
+  ];
+
+  switchModalImageTab('visual');
+  renderModalImagesList();
+  
+  const descInput = document.getElementById('edit-myanmar-desc-input');
+  if (descInput) descInput.value = place.myanmarDesc || '';
+
+  const highInput = document.getElementById('edit-highlights-input');
+  if (highInput) highInput.value = place.myanmarHighlights ? place.myanmarHighlights.join('\n') : '';
+
+  const mustCheck = document.getElementById('edit-mustvisit-check');
+  if (mustCheck) mustCheck.checked = !!place.isMustVisit;
+
+  const modal = document.getElementById('place-edit-modal');
+  if (modal) modal.classList.remove('hidden');
 }
 
 export function closePlaceModal() {
-  document.getElementById('place-edit-modal').classList.add('hidden');
+  const modal = document.getElementById('place-edit-modal');
+  if (modal) modal.classList.add('hidden');
 }
 
 export function handleSavePlace(e) {
   if (e) e.preventDefault();
-  const targetCityId = document.getElementById('edit-city-select').value;
-  const name = document.getElementById('edit-name-input').value.trim();
-  const category = document.getElementById('edit-category-select').value;
-  const durationHours = parseFloat(document.getElementById('edit-duration-input').value) || 2.0;
-  const location = document.getElementById('edit-location-input').value.trim();
-  const imageUrl = document.getElementById('edit-image-input').value.trim() || 'https://images.unsplash.com/photo-1559592413-7cec4d0cae2b?auto=format&fit=crop&w=800&q=80';
-  const myanmarDesc = document.getElementById('edit-myanmar-desc-input').value.trim();
-  const highlightsRaw = document.getElementById('edit-highlights-input').value.trim();
-  const isMustVisit = document.getElementById('edit-mustvisit-check').checked;
+  const citySelect = document.getElementById('edit-city-select');
+  const nameInput = document.getElementById('edit-name-input');
+  const catSelect = document.getElementById('edit-category-select');
+  const durInput = document.getElementById('edit-duration-input');
+  const locInput = document.getElementById('edit-location-input');
+  const descInput = document.getElementById('edit-myanmar-desc-input');
+  const highInput = document.getElementById('edit-highlights-input');
+  const mustCheck = document.getElementById('edit-mustvisit-check');
+
+  const targetCityId = citySelect ? citySelect.value : (state.currentCityId || 'danang');
+  const name = nameInput ? nameInput.value.trim() : '';
+  const category = catSelect ? catSelect.value : 'must_visit';
+  const durationHours = (durInput && parseFloat(durInput.value)) || 2.0;
+  const location = locInput ? locInput.value.trim() : '';
+  
+  // Extract images from state.modalImages or bulk input
+  let images = state.modalImages && state.modalImages.length > 0 ? state.modalImages.filter(Boolean) : [];
+  if (images.length === 0) {
+    const bulkInput = document.getElementById('edit-images-input');
+    const imagesRaw = bulkInput ? bulkInput.value.trim() : '';
+    images = imagesRaw ? imagesRaw.split('\n').map(s => s.trim()).filter(Boolean) : [];
+  }
+
+  const imageUrl = images[0] || 'https://images.unsplash.com/photo-1559592413-7cec4d0cae2b?auto=format&fit=crop&w=1200&q=80';
+  if (images.length === 0) images.push(imageUrl);
+
+  const myanmarDesc = descInput ? descInput.value.trim() : '';
+  const highlightsRaw = highInput ? highInput.value.trim() : '';
+  const isMustVisit = mustCheck ? mustCheck.checked : false;
   const highlights = highlightsRaw ? highlightsRaw.split('\n').map(s => s.trim()).filter(Boolean) : [];
 
   if (!name) {
@@ -996,6 +1812,7 @@ export function handleSavePlace(e) {
         durationText: `${durationHours.toFixed(1)} Hours`,
         location,
         imageUrl,
+        images,
         myanmarDesc,
         myanmarHighlights: highlights,
         isMustVisit
@@ -1012,6 +1829,7 @@ export function handleSavePlace(e) {
       durationText: `${durationHours.toFixed(1)} Hours`,
       location,
       imageUrl,
+      images,
       myanmarDesc,
       myanmarHighlights: highlights,
       isMustVisit,
@@ -1023,79 +1841,104 @@ export function handleSavePlace(e) {
 
   saveTravelData();
   closePlaceModal();
-  if (state.currentCityId) renderPlacesList();
-  alert('Place saved successfully!');
+  renderPlacesList();
+  showToast('Place Saved', `Successfully updated "${name}" with ${images.length} photos`, 'success');
 }
 
 export function deletePlace(placeId) {
-  if (!confirm('Are you sure you want to delete this place?')) return;
   const city = travelData.cities[state.currentCityId];
   if (!city) return;
-  city.places = city.places.filter(p => p.id !== placeId);
-  saveTravelData();
-  removePlaceFromPlan(placeId);
-  renderPlacesList();
+  const place = city.places.find(p => p.id === placeId);
+  if (!place) return;
+
+  if (confirm(`Are you sure you want to delete "${place.name}"?`)) {
+    city.places = city.places.filter(p => p.id !== placeId);
+    state.selectedPlaces = state.selectedPlaces.filter(p => p.id !== placeId);
+    saveTravelData();
+    try {
+      localStorage.setItem('ocean_travel_plan', JSON.stringify(state.selectedPlaces));
+    } catch(e) {}
+    renderPlacesList();
+    updateCartMetrics();
+    renderDrawerPlacesList();
+    showToast('Deleted Place', `"${place.name}" removed from database`, 'info');
+  }
 }
 
 /**
- * PDF Generation
+ * Step 3: PDF Generation & Printing
  */
 export function prepareAndGeneratePDF() {
   if (state.selectedPlaces.length === 0) {
-    alert('Please select at least 1 attraction to generate your trip plan PDF.');
+    showToast('Empty Itinerary', 'Please add at least one attraction before downloading PDF', 'info');
+    toggleCartDrawer(true);
     return;
   }
 
-  toggleCartDrawer(false);
+  const clientNameInput = document.getElementById('traveler-name-input') || document.getElementById('client-name-input');
+  const clientName = (clientNameInput && clientNameInput.value.trim()) ? clientNameInput.value.trim() : 'Valued Client';
 
-  const clientName = (document.getElementById('traveler-name-input')?.value || '').trim() || 'Ocean Travel Client';
-  const travelDates = (document.getElementById('travel-dates-input')?.value || '').trim() || 'Custom Date Itinerary';
-  
+  const dateStr = new Date().toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+
+  const currentCity = travelData.cities[state.currentCityId] || { name: 'Multi-City Tour' };
+  const currentCountry = travelData.countries.find(c => c.id === state.currentCountryId) || { name: 'Southeast Asia' };
+
   const totalHours = state.selectedPlaces.reduce((sum, p) => sum + (p.durationHours || 2), 0);
-  const totalDays = (totalHours / 8).toFixed(1);
-  const cityNames = [...new Set(state.selectedPlaces.map(p => p.cityName || 'Destination'))].join(', ');
+  const estimatedDays = (totalHours / 8).toFixed(1);
 
-  document.getElementById('pdf-client-name').textContent = `${clientName} (${travelDates})`;
-  document.getElementById('pdf-destination-name').textContent = cityNames || 'Vietnam / Asia';
-  document.getElementById('pdf-total-hours').textContent = `${totalHours.toFixed(1)} Hours`;
-  document.getElementById('pdf-total-days').textContent = `~${totalDays} Touring Days (8h/Day)`;
-  document.getElementById('pdf-item-count-label').textContent = `${state.selectedPlaces.length} Attractions Selected`;
-  document.getElementById('pdf-generated-date').textContent = `Date: ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+  // Populate PDF Template
+  const pdfClient = document.getElementById('pdf-client-name');
+  if (pdfClient) pdfClient.textContent = clientName;
 
-  const pdfPlacesContainer = document.getElementById('pdf-places-list-container');
-  pdfPlacesContainer.innerHTML = state.selectedPlaces.map((place, index) => `
-    <div style="page-break-inside: avoid;" class="border border-slate-200 rounded-lg p-3 bg-white space-y-1.5 mb-2">
-      <div class="flex justify-between items-start">
-        <div class="flex items-center gap-2">
-          <span class="w-5 h-5 rounded-full bg-[#a80c10] text-white text-[10px] font-bold flex items-center justify-center">
-            ${index + 1}
-          </span>
-          <span class="font-bold text-slate-900 text-xs">${place.name}</span>
-          <span class="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-medium">${place.categoryLabel || 'Attraction'}</span>
+  const pdfDest = document.getElementById('pdf-destination-name');
+  if (pdfDest) pdfDest.textContent = `${currentCity.name}, ${currentCountry.name}`;
+
+  const pdfHours = document.getElementById('pdf-total-hours');
+  if (pdfHours) pdfHours.textContent = `${totalHours.toFixed(1)} Hours`;
+
+  const pdfDays = document.getElementById('pdf-total-days');
+  if (pdfDays) pdfDays.textContent = `~${estimatedDays} Days`;
+
+  const pdfDate = document.getElementById('pdf-generated-date');
+  if (pdfDate) pdfDate.textContent = `Date: ${dateStr}`;
+
+  const pdfCount = document.getElementById('pdf-item-count-label');
+  if (pdfCount) pdfCount.textContent = `${state.selectedPlaces.length} Places Chosen`;
+
+  const placesContainer = document.getElementById('pdf-places-list-container');
+  if (placesContainer) {
+    placesContainer.innerHTML = state.selectedPlaces.map((place, idx) => `
+      <div style="page-break-inside: avoid;" class="border border-slate-200 rounded-xl p-3.5 bg-slate-50 flex items-start gap-4">
+        <div class="w-7 h-7 rounded-full bg-[#a80c10] text-white text-xs font-bold flex items-center justify-center flex-shrink-0 mt-0.5">
+          ${idx + 1}
         </div>
-        <span class="text-[11px] font-bold text-[#a80c10]">${place.durationText || '2.0 Hours'}</span>
-      </div>
-      
-      <p class="myanmar-text text-[11px] text-slate-700 leading-relaxed pl-7">
-        ${place.myanmarDesc || ''}
-      </p>
-
-      ${place.myanmarHighlights && place.myanmarHighlights.length > 0 ? `
-        <div class="pl-7 pt-1">
-          <div class="text-[10px] font-semibold text-slate-500">Key Highlights:</div>
-          <div class="myanmar-text text-[10px] text-slate-600">
-            • ${place.myanmarHighlights.join(' • ')}
+        <div class="flex-1 space-y-1">
+          <div class="flex justify-between items-baseline">
+            <h4 class="font-bold text-slate-900 text-sm">${place.name}</h4>
+            <span class="text-xs font-semibold text-[#a80c10] bg-red-50 px-2 py-0.5 rounded">${place.durationText || '2h'}</span>
           </div>
+          <div class="text-[11px] text-slate-500 font-medium">${place.categoryLabel || 'Attraction'} • ${place.cityName || 'City'}</div>
+          <p class="myanmar-text text-[11px] text-slate-700 leading-relaxed pt-0.5">${place.myanmarDesc || ''}</p>
+          ${place.myanmarHighlights && place.myanmarHighlights.length > 0 ? `
+            <div class="myanmar-text text-[10px] text-amber-900 bg-amber-50/80 p-2 rounded border border-amber-200/60 mt-1">
+              <strong>အထူးလေ့လာရန်:</strong> ${place.myanmarHighlights.join(' • ')}
+            </div>
+          ` : ''}
         </div>
-      ` : ''}
-    </div>
-  `).join('');
+      </div>
+    `).join('');
+  }
 
   const element = document.getElementById('pdf-content-to-print');
-  const genBtn = document.getElementById('btn-generate-pdf-bottom');
-  const originalText = genBtn ? genBtn.innerHTML : '';
+  const genBtn = document.getElementById('btn-generate-pdf-bottom') || document.getElementById('btn-generate-pdf');
+  const originalText = genBtn ? genBtn.innerHTML : 'Generate Trip Plan';
+
   if (genBtn) {
-    genBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Generating PDF...';
+    genBtn.innerHTML = '<i class="fa-solid fa-spinner animate-spin mr-1"></i> Generating Official PDF...';
     genBtn.disabled = true;
   }
 
@@ -1108,32 +1951,41 @@ export function prepareAndGeneratePDF() {
   };
 
   const wrapper = document.getElementById('pdf-printable-wrapper');
-  wrapper.classList.remove('hidden');
+  if (wrapper) wrapper.classList.remove('hidden');
 
-  html2pdf().set(opt).from(element).save().then(() => {
-    wrapper.classList.add('hidden');
+  if (typeof html2pdf === 'function' && element) {
+    html2pdf().set(opt).from(element).save().then(() => {
+      if (wrapper) wrapper.classList.add('hidden');
+      if (genBtn) {
+        genBtn.innerHTML = originalText;
+        genBtn.disabled = false;
+      }
+
+      if (typeof confetti === 'function') {
+        confetti({
+          particleCount: 80,
+          spread: 70,
+          origin: { y: 0.6 },
+          colors: ['#a80c10', '#0284c7', '#0f172a', '#f59e0b']
+        });
+      }
+    }).catch(err => {
+      console.error('PDF Generation error:', err);
+      if (wrapper) wrapper.classList.add('hidden');
+      if (genBtn) {
+        genBtn.innerHTML = originalText;
+        genBtn.disabled = false;
+      }
+      alert('Could not generate PDF directly. Please check browser print settings.');
+    });
+  } else {
+    if (wrapper) wrapper.classList.add('hidden');
     if (genBtn) {
       genBtn.innerHTML = originalText;
       genBtn.disabled = false;
     }
-
-    if (typeof confetti === 'function') {
-      confetti({
-        particleCount: 80,
-        spread: 70,
-        origin: { y: 0.6 },
-        colors: ['#a80c10', '#0284c7', '#0f172a', '#f59e0b']
-      });
-    }
-  }).catch(err => {
-    console.error('PDF Generation error:', err);
-    wrapper.classList.add('hidden');
-    if (genBtn) {
-      genBtn.innerHTML = originalText;
-      genBtn.disabled = false;
-    }
-    alert('Could not generate PDF directly. Please check browser print settings.');
-  });
+    window.print();
+  }
 }
 
 // Attach to window so HTML inline onclick handlers work smoothly
@@ -1160,9 +2012,27 @@ window.OceanApp = {
   closePlaceModal,
   handleSavePlace,
   deletePlace,
+  renderModalImagesList,
+  updateModalImageUrl,
+  addModalImage,
+  deleteModalImage,
+  makeCoverModalImage,
+  moveModalImage,
+  addSampleModalImage,
+  switchModalImageTab,
+  handleModalImagesBulkChange,
   resetDataToDefault,
+  saveTravelData,
+  updateSyncStatusUI,
+  subscribeToFirestoreUpdates,
   prepareAndGeneratePDF,
-  showToast
+  showToast,
+  openImageLightbox,
+  closeImageLightbox,
+  prevLightboxImage,
+  nextLightboxImage,
+  setLightboxImageIndex,
+  toggleLightboxFullscreen
 };
 
 if (document.readyState === 'loading') {

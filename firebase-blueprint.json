@@ -1,0 +1,25 @@
+{
+  "entities": {
+    "ocean_travel": {
+      "title": "Ocean Travel Catalog",
+      "description": "Master curated catalog of countries, cities, and attractions for Southeast Asia tour planning with Myanmar descriptions and photos.",
+      "type": "object",
+      "properties": {
+        "countries": {
+          "type": "array",
+          "description": "List of supported countries (Vietnam, Singapore, Malaysia, etc.)"
+        },
+        "cities": {
+          "type": "object",
+          "description": "Dictionary of city data and their attractions"
+        }
+      }
+    }
+  },
+  "rules": {
+    "ocean_travel": {
+      "read": true,
+      "write": true
+    }
+  }
+}

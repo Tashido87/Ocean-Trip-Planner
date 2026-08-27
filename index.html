@@ -144,6 +144,14 @@
 
           <!-- Trip Status & Drawer Action (Top Right) -->
           <div class="flex items-center gap-2 sm:gap-3">
+            <!-- Firebase Cloud Sync Status Badge -->
+            <div id="cloud-sync-container" class="hidden sm:flex items-center">
+              <span id="cloud-sync-badge" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200" title="Real-time synchronized with Google Firebase Firestore">
+                <span id="cloud-sync-dot" class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span id="cloud-sync-text">Firebase Cloud Synced</span>
+              </span>
+            </div>
+
             <button id="nav-cart-btn" onclick="window.OceanApp.toggleCartDrawer(true)" class="relative flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-full bg-slate-100 border border-slate-200 text-slate-800 hover:bg-slate-900 hover:text-white transition-all duration-200 font-semibold text-xs shadow-xs group tap-feedback cursor-pointer">
               <i class="fa-solid fa-suitcase-rolling text-sm text-[#a80c10] group-hover:text-white group-hover:rotate-12 transition-all"></i>
               <span class="text-xs sm:text-sm font-bold">My Trip Plan</span>
@@ -158,15 +166,19 @@
     <!-- Admin Status Banner (Visible when admin is active) -->
     <div id="admin-active-bar" class="bg-amber-500 text-slate-950 text-xs px-4 py-2 font-semibold flex justify-between items-center hidden shadow-sm">
       <div class="max-w-7xl mx-auto w-full flex flex-wrap justify-between items-center gap-2">
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2 flex-wrap">
           <i class="fa-solid fa-user-shield text-slate-950"></i>
-          <span>Admin Access Active: <strong id="admin-logged-email">herozboy@gmail.com</strong> (Post Management Enabled)</span>
+          <span>Admin Access Active: <strong id="admin-logged-email">herozboy@gmail.com</strong></span>
+          <span id="admin-cloud-sync-badge" class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-900 text-amber-300 text-[10px] font-bold">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span id="admin-cloud-sync-text">Firebase Cloud Live</span>
+          </span>
         </div>
         <div class="flex items-center gap-2">
           <button onclick="window.OceanApp.openAddPlaceModal()" class="px-3 py-1 bg-slate-900 text-white rounded-lg text-[11px] font-bold hover:bg-black transition-colors shadow-xs">
             <i class="fa-solid fa-plus mr-1 text-amber-400"></i> Add New Place
           </button>
-          <button onclick="window.OceanApp.resetDataToDefault()" class="px-2.5 py-1 bg-white/80 text-slate-900 rounded-lg text-[11px] font-bold hover:bg-white transition-colors">
+          <button onclick="window.OceanApp.resetDataToDefault()" class="px-2.5 py-1 bg-white/80 text-slate-900 rounded-lg text-[11px] font-bold hover:bg-white transition-colors" title="Reset catalog to master defaults and sync to Firebase">
             Reset Data
           </button>
           <button onclick="window.OceanApp.logoutAdmin()" class="px-2 py-1 text-slate-900 hover:underline text-[11px]">
@@ -617,9 +629,70 @@
             </div>
           </div>
 
-          <div>
-            <label class="block font-bold text-slate-700 mb-1">Photo Image URL</label>
-            <input type="url" id="edit-image-input" required placeholder="https://images.unsplash.com/..." class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl" />
+          <!-- Interactive Photo Image Gallery Manager -->
+          <div class="bg-slate-50 border border-slate-200/90 rounded-2xl p-4 space-y-3.5">
+            <div class="flex items-center justify-between flex-wrap gap-2">
+              <div class="flex items-center gap-2">
+                <div class="w-7 h-7 rounded-lg bg-[#a80c10]/10 text-[#a80c10] flex items-center justify-center font-bold text-xs">
+                  <i class="fa-solid fa-images"></i>
+                </div>
+                <div>
+                  <label class="block font-bold text-slate-800 text-xs">Attraction Photo Gallery</label>
+                  <p class="text-[10px] text-slate-500">Edit URLs, delete photos, add new images, or reorder (1st is cover)</p>
+                </div>
+              </div>
+              
+              <!-- Tab / Mode Switcher -->
+              <div class="flex items-center bg-white border border-slate-200 rounded-lg p-0.5 text-[11px] font-semibold">
+                <button type="button" id="img-tab-visual-btn" onclick="window.OceanApp.switchModalImageTab('visual')" class="px-2.5 py-1 rounded-md bg-[#a80c10] text-white transition-colors">
+                  <i class="fa-solid fa-table-cells mr-1"></i> Visual Cards
+                </button>
+                <button type="button" id="img-tab-bulk-btn" onclick="window.OceanApp.switchModalImageTab('bulk')" class="px-2.5 py-1 rounded-md text-slate-600 hover:text-slate-900 transition-colors">
+                  <i class="fa-solid fa-code mr-1"></i> Bulk Text
+                </button>
+              </div>
+            </div>
+
+            <!-- Visual Manager Mode -->
+            <div id="modal-images-visual-container" class="space-y-2.5">
+              
+              <!-- List of current photo cards -->
+              <div id="modal-images-cards-list" class="space-y-2 max-h-64 overflow-y-auto pr-1">
+                <!-- Rendered dynamically -->
+              </div>
+
+              <!-- Add New Image Section -->
+              <div class="bg-white border border-dashed border-slate-300 rounded-xl p-3 space-y-2">
+                <div class="text-[11px] font-bold text-slate-700 flex items-center justify-between">
+                  <span><i class="fa-solid fa-plus text-[#a80c10] mr-1"></i> Add New Photo URL</span>
+                  <span id="modal-images-count-badge" class="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-mono font-medium">3 Photos</span>
+                </div>
+                <div class="flex gap-2">
+                  <input type="url" id="new-image-url-input" placeholder="Paste image URL (e.g., https://images.unsplash.com/...)" 
+                         class="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:bg-white focus:border-[#a80c10] focus:ring-1 focus:ring-[#a80c10] outline-none" 
+                         onkeydown="if(event.key === 'Enter'){ event.preventDefault(); window.OceanApp.addModalImage(); }" />
+                  <button type="button" onclick="window.OceanApp.addModalImage()" class="px-3.5 py-2 bg-[#a80c10] hover:bg-[#8e0a0d] text-white font-bold text-xs rounded-xl shadow-xs flex items-center gap-1.5 whitespace-nowrap cursor-pointer">
+                    <i class="fa-solid fa-plus"></i> Add URL
+                  </button>
+                </div>
+                <!-- Quick sample travel presets helper -->
+                <div class="flex items-center justify-between pt-1 text-[10px] text-slate-400">
+                  <span>Need sample photos?</span>
+                  <button type="button" onclick="window.OceanApp.addSampleModalImage()" class="text-[#a80c10] hover:underline font-medium">
+                    + Insert Sample High-Res Photo
+                  </button>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- Bulk Multi-line Text Mode -->
+            <div id="modal-images-bulk-container" class="space-y-1.5 hidden">
+              <textarea id="edit-images-input" rows="4" placeholder="https://images.unsplash.com/...&#10;https://images.unsplash.com/..." 
+                        class="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-mono text-[11px] leading-relaxed text-slate-800"
+                        oninput="window.OceanApp.handleModalImagesBulkChange(this.value)"></textarea>
+              <p class="text-[10px] text-slate-500">Each line corresponds to one high-resolution image URL. The 1st URL is the main cover.</p>
+            </div>
           </div>
 
           <div>
@@ -652,6 +725,76 @@
           </div>
         </form>
       </div>
+    </div>
+
+    <!-- HIGH-RESOLUTION IMAGE LIGHTBOX POPUP MODAL -->
+    <div id="image-lightbox-modal" class="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex flex-col justify-between hidden transition-opacity duration-300 select-none">
+      
+      <!-- Top Control Bar -->
+      <div class="flex items-center justify-between p-4 sm:p-6 bg-gradient-to-b from-black/90 via-black/50 to-transparent z-20">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-2xl bg-white/10 backdrop-blur-md flex items-center justify-center text-white text-base border border-white/15 shadow-sm">
+            <i class="fa-solid fa-camera-retro text-amber-400"></i>
+          </div>
+          <div>
+            <h4 id="lightbox-place-title" class="text-white font-bold text-sm sm:text-base tracking-wide drop-shadow-sm">Place Title</h4>
+            <div class="flex items-center gap-2 text-xs text-white/70">
+              <span id="lightbox-category-badge" class="font-semibold text-amber-300">Category</span>
+              <span>•</span>
+              <span id="lightbox-counter" class="font-mono text-white/90 font-bold bg-white/10 px-2 py-0.5 rounded-md text-[11px]">1 / 4</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <button type="button" onclick="window.OceanApp.toggleLightboxFullscreen()" class="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white flex items-center justify-center transition-all cursor-pointer border border-white/10 text-xs shadow-sm" title="Toggle Fullscreen">
+            <i class="fa-solid fa-expand" id="lightbox-fullscreen-icon"></i>
+          </button>
+          <button type="button" onclick="window.OceanApp.closeImageLightbox()" class="w-10 h-10 rounded-full bg-white/20 hover:bg-[#a80c10] active:scale-95 text-white flex items-center justify-center transition-all cursor-pointer shadow-lg text-sm" title="Close (ESC)">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Center Main Image Stage -->
+      <div class="relative flex-1 flex items-center justify-center p-2 sm:p-6 overflow-hidden" id="lightbox-stage-area" onclick="if(event.target === this) window.OceanApp.closeImageLightbox()">
+        <!-- Previous Button -->
+        <button type="button" onclick="event.stopPropagation(); window.OceanApp.prevLightboxImage(event)" class="absolute left-2 sm:left-6 z-20 w-11 h-11 sm:w-14 sm:h-14 rounded-full bg-black/60 hover:bg-black/90 active:scale-90 text-white border border-white/20 flex items-center justify-center transition-all cursor-pointer shadow-2xl backdrop-blur-xs group">
+          <i class="fa-solid fa-chevron-left text-lg sm:text-xl transition-transform group-hover:-translate-x-0.5"></i>
+        </button>
+
+        <!-- Main High-Res Image Container -->
+        <div class="relative max-w-5xl max-h-[70vh] flex items-center justify-center select-none" onclick="event.stopPropagation()">
+          <img id="lightbox-main-image" src="" alt="Place Photo" class="max-w-full max-h-[70vh] w-auto h-auto object-contain rounded-2xl shadow-2xl transition-all duration-300 ease-out border border-white/10" />
+          <div id="lightbox-loading-spinner" class="absolute inset-0 flex items-center justify-center bg-black/40 rounded-2xl hidden">
+            <div class="w-10 h-10 border-3 border-white/20 border-t-white rounded-full animate-spin"></div>
+          </div>
+        </div>
+
+        <!-- Next Button -->
+        <button type="button" onclick="event.stopPropagation(); window.OceanApp.nextLightboxImage(event)" class="absolute right-2 sm:right-6 z-20 w-11 h-11 sm:w-14 sm:h-14 rounded-full bg-black/60 hover:bg-black/90 active:scale-90 text-white border border-white/20 flex items-center justify-center transition-all cursor-pointer shadow-2xl backdrop-blur-xs group">
+          <i class="fa-solid fa-chevron-right text-lg sm:text-xl transition-transform group-hover:translate-x-0.5"></i>
+        </button>
+      </div>
+
+      <!-- Bottom Bar: Captions & Interactive Thumbnail Strip -->
+      <div class="p-4 sm:p-6 bg-gradient-to-t from-black/95 via-black/70 to-transparent z-20 space-y-3">
+        <!-- Caption / Highlights -->
+        <div class="max-w-3xl mx-auto text-center">
+          <p id="lightbox-caption" class="myanmar-text text-xs sm:text-sm text-white/90 font-medium line-clamp-2 drop-shadow-sm"></p>
+        </div>
+
+        <!-- Thumbnails Strip -->
+        <div id="lightbox-thumbnails-container" class="flex items-center justify-center gap-2.5 overflow-x-auto py-1 scrollbar-none max-w-2xl mx-auto">
+          <!-- Dynamic thumbnails rendered by JS -->
+        </div>
+
+        <!-- Keyboard helper hint -->
+        <div class="text-center text-[10px] text-white/40 hidden sm:block">
+          Use ← → arrow keys to navigate • ESC to close • Tap or click outside to dismiss
+        </div>
+      </div>
+
     </div>
 
     <!-- HIDDEN PDF EXPORT PRINTABLE TEMPLATE -->
